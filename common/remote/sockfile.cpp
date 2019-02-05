@@ -56,12 +56,13 @@
 #include "jflz.hpp"
 #include "digisign.hpp"
 
+#include "dafdesc.hpp"
+
 using namespace cryptohelper;
 
 
 #define SOCKET_CACHE_MAX 500
 
-#define MIN_KEYFILTSUPPORT_VERSION 20
 
 #ifdef _DEBUG
 //#define SIMULATE_PACKETLOSS 1
@@ -186,7 +187,7 @@ struct dummyReadWrite
 // backward compatible modes
 typedef enum { compatIFSHnone, compatIFSHread, compatIFSHwrite, compatIFSHexec, compatIFSHall} compatIFSHmode;
 
-static const char *VERSTRING= "DS V2.4"       // dont forget FILESRV_VERSION in header
+static const char *VERSTRING= "DS V2.5"       // dont forget FILESRV_VERSION in header
 #ifdef _WIN32
 "Windows ";
 #else
@@ -360,6 +361,8 @@ enum
     RFCStreamRead,                                 // 43
 // 2.4
     RFCStreamReadTestSocket,                       // 44
+// 2.5
+    RFCStreamGeneral,                              // 45
     RFCStreamReadJSON = '{',
     RFCmaxnormal,
     RFCmax,
@@ -3982,32 +3985,322 @@ public:
     }
 };
 
+interface IRemoteReadActivity;
+interface IRemoteWriteActivity;
 interface IRemoteActivity : extends IInterface
 {
-    virtual const void *nextRow(MemoryBufferBuilder &outBuilder, size32_t &sz) = 0;
     virtual unsigned __int64 queryProcessed() const = 0;
     virtual IOutputMetaData *queryOutputMeta() const = 0;
     virtual StringBuffer &getInfoStr(StringBuffer &out) const = 0;
     virtual void serializeCursor(MemoryBuffer &tgt) const = 0;
     virtual void restoreCursor(MemoryBuffer &src) = 0;
     virtual bool isGrouped() const = 0;
+    virtual IRemoteReadActivity *queryIsReadActivity() { return nullptr; }
+    virtual IRemoteWriteActivity *queryIsWriteActivity() { return nullptr; }
+};
+
+
+interface IRemoteReadActivity : extends IRemoteActivity
+{
+    virtual const void *nextRow(MemoryBufferBuilder &outBuilder, size32_t &sz) = 0;
+};
+
+interface IRemoteWriteActivity : extends IRemoteActivity
+{
+    virtual void write(size32_t sz, const void *row) = 0;
 };
 
 class CRemoteRequest : public CSimpleInterfaceOf<IInterface>
 {
+    int cursorHandle;
     OutputFormat format;
     unsigned __int64 replyLimit;
     Linked<IRemoteActivity> activity;
     Linked<ICompressor> compressor;
-public:
-    CRemoteRequest(OutputFormat _format, ICompressor *_compressor, unsigned __int64 _replyLimit, IRemoteActivity *_activity)
-        : format(_format), compressor(_compressor), replyLimit(_replyLimit), activity(_activity)
+    Linked<IExpander> expander;
+    MemoryBuffer expandMb;
+    Owned<IXmlWriterExt> responseWriter; // for xml or json response
+
+    bool handleFull(MemoryBuffer &inMb, size32_t inPos, MemoryBuffer &compressMb, ICompressor *compressor, size32_t replyLimit, size32_t &totalSz)
     {
+        size32_t sz = inMb.length()-inPos;
+        if (sz < replyLimit)
+            return false;
+
+        if (!compressor)
+            return true;
+
+        // consumes data from inMb into compressor
+        totalSz += sz;
+        const void *data = inMb.bytes()+inPos;
+        assertex(compressor->write(data, sz) == sz);
+        inMb.setLength(inPos);
+        return compressMb.capacity() > replyLimit;
+    }
+    void processRead(IPropertyTree *requestTree, MemoryBuffer &responseMb)
+    {
+        IRemoteReadActivity *readActivity = activity->queryIsReadActivity();
+        assertex(readActivity);
+
+        MemoryBuffer compressMb;
+
+        IOutputMetaData *outMeta = readActivity->queryOutputMeta();
+        bool eoi=false;
+
+        bool grouped = readActivity->isGrouped();
+        MemoryBuffer resultBuffer;
+        MemoryBufferBuilder outBuilder(resultBuffer, outMeta->getMinRecordSize());
+        if (outFmt_Binary == format)
+        {
+            if (compressor)
+            {
+                compressMb.setEndian(__BIG_ENDIAN);
+                compressMb.append(responseMb);
+            }
+
+            DelayedMarker<size32_t> dataLenMarker(compressor ? compressMb : responseMb); // data length
+
+            if (compressor)
+            {
+                size32_t initialSz = replyLimit >= 0x10000 ? 0x10000 : replyLimit;
+                compressor->open(compressMb, initialSz);
+            }
+
+            outBuilder.setBuffer(responseMb); // write direct to responseMb buffer for efficiency
+            unsigned __int64 numProcessedStart = readActivity->queryProcessed();
+            size32_t totalDataSz = 0;
+            size32_t dataStartPos = responseMb.length();
+
+            if (grouped)
+            {
+                bool pastFirstRow = numProcessedStart>0;
+                do
+                {
+                    size32_t eogPos = 0;
+                    if (pastFirstRow)
+                    {
+                        /* this is for last row output, which might have been returned in the previous request
+                         * The eog marker may change as a result of the next row (see writeDirect() call below);
+                         */
+                        eogPos = responseMb.length();
+                        responseMb.append(false);
+                    }
+                    size32_t rowSz;
+                    const void *row = readActivity->nextRow(outBuilder, rowSz);
+                    if (!row)
+                    {
+                        if (!pastFirstRow)
+                        {
+                            eoi = true;
+                            break;
+                        }
+                        else
+                        {
+                            bool eog = true;
+                            responseMb.writeDirect(eogPos, sizeof(eog), &eog);
+                            row = readActivity->nextRow(outBuilder, rowSz);
+                            if (!row)
+                            {
+                                eoi = true;
+                                break;
+                            }
+                        }
+                    }
+                    pastFirstRow = true;
+                }
+                while (!handleFull(responseMb, dataStartPos, compressMb, compressor, replyLimit, totalDataSz));
+            }
+            else
+            {
+                do
+                {
+                    size32_t rowSz;
+                    const void *row = readActivity->nextRow(outBuilder, rowSz);
+                    if (!row)
+                    {
+                        eoi = true;
+                        break;
+                    }
+                }
+                while (!handleFull(responseMb, dataStartPos, compressMb, compressor, replyLimit, totalDataSz));
+            }
+
+            // Consume any trailing data remaining
+            if (compressor)
+            {
+                size32_t sz = responseMb.length()-dataStartPos;
+                if (sz)
+                {
+                    // consumes data built up in responseMb buffer into compressor
+                    totalDataSz += sz;
+                    const void *data = responseMb.bytes()+dataStartPos;
+                    assertex(compressor->write(data, sz) == sz);
+                    responseMb.setLength(dataStartPos);
+                }
+            }
+
+            // finalize responseMb
+            dataLenMarker.write(compressor ? totalDataSz : responseMb.length()-dataStartPos);
+            DelayedSizeMarker cursorLenMarker(responseMb); // cursor length
+            if (!eoi)
+                readActivity->serializeCursor(responseMb);
+            cursorLenMarker.write();
+            if (compressor)
+            {
+                // consume cursor into compressor
+                size32_t sz = responseMb.length()-dataStartPos;
+                const void *data = responseMb.bytes()+dataStartPos;
+                assertex(compressor->write(data, sz) == sz);
+                compressor->close();
+                // now ready to swap compressed output into responseMb
+                responseMb.swapWith(compressMb);
+            }
+        }
+        else
+        {
+            responseWriter->outputBeginArray("Row");
+            if (grouped)
+            {
+                bool pastFirstRow = readActivity->queryProcessed()>0;
+                bool first = true;
+                do
+                {
+                    size32_t rowSz;
+                    const void *row = readActivity->nextRow(outBuilder, rowSz);
+                    if (!row)
+                    {
+                        if (!pastFirstRow)
+                        {
+                            eoi = true;
+                            break;
+                        }
+                        else
+                        {
+                            row = readActivity->nextRow(outBuilder, rowSz);
+                            if (!row)
+                            {
+                                eoi = true;
+                                break;
+                            }
+                            if (first) // possible if eog was 1st row on next packet
+                                responseWriter->outputBeginNested("Row", false);
+                            responseWriter->outputBool(true, "dfs:Eog"); // field name cannot clash with an ecl field name
+                        }
+                    }
+                    if (pastFirstRow)
+                        responseWriter->outputEndNested("Row"); // close last row
+
+                    responseWriter->outputBeginNested("Row", false);
+                    outMeta->toXML((const byte *)row, *responseWriter);
+                    resultBuffer.clear();
+                    pastFirstRow = true;
+                    first = false;
+                }
+                while (responseWriter->length() < replyLimit);
+                if (pastFirstRow)
+                    responseWriter->outputEndNested("Row"); // close last row
+            }
+            else
+            {
+                do
+                {
+                    size32_t rowSz;
+                    const void *row = readActivity->nextRow(outBuilder, rowSz);
+                    if (!row)
+                    {
+                        eoi = true;
+                        break;
+                    }
+                    responseWriter->outputBeginNested("Row", false);
+                    outMeta->toXML((const byte *)row, *responseWriter);
+                    responseWriter->outputEndNested("Row");
+                    resultBuffer.clear();
+                }
+                while (responseWriter->length() < replyLimit);
+            }
+            responseWriter->outputEndArray("Row");
+            if (!eoi)
+            {
+                MemoryBuffer cursorMb;
+                cursorMb.setEndian(__BIG_ENDIAN);
+                readActivity->serializeCursor(cursorMb);
+                StringBuffer cursorBinStr;
+                JBASE64_Encode(cursorMb.toByteArray(), cursorMb.length(), cursorBinStr);
+                responseWriter->outputString(cursorBinStr.length(), cursorBinStr.str(), "cursorBin");
+            }
+        }
+    }
+    void processWrite(IPropertyTree *requestTree, MemoryBuffer &rowDataMb, MemoryBuffer &responseMb)
+    {
+        IRemoteWriteActivity *writeActivity = activity->queryIsWriteActivity();
+        assertex(writeActivity);
+
+        /* row data is in serialized disk format already, and do not need to look at individual rows
+         * so simply dump to disk
+         */
+        size32_t rowDataSz;
+        rowDataMb.read(rowDataSz);
+        const void *rowData;
+        if (expander)
+        {
+            rowDataSz = expander->init(rowDataMb.readDirect(rowDataSz));
+            expandMb.clear().reserve(rowDataSz);
+            expander->expand(expandMb.bufferBase());
+            rowData = expandMb.bufferBase();
+        }
+        else
+            rowData = rowDataMb.readDirect(rowDataSz);
+        writeActivity->write(rowDataSz, rowData);
+    }
+
+public:
+    CRemoteRequest(int _cursorHandle, OutputFormat _format, ICompressor *_compressor, IExpander *_expander, IRemoteActivity *_activity)
+        : cursorHandle(_cursorHandle), format(_format), compressor(_compressor), expander(_expander), activity(_activity)
+    {
+        if (outFmt_Binary != format)
+        {
+            responseWriter.setown(createIXmlWriterExt(0, 0, nullptr, outFmt_Xml == format ? WTStandard : WTJSONObject));
+            responseWriter->outputBeginNested("Response", true);
+            if (outFmt_Xml == format)
+                responseWriter->outputCString("urn:hpcc:dfs", "@xmlns:dfs");
+            responseWriter->outputUInt(cursorHandle, sizeof(cursorHandle), "handle");
+        }
     }
     OutputFormat queryFormat() const { return format; }
     unsigned __int64 queryReplyLimit() const { return replyLimit; }
     IRemoteActivity *queryActivity() const { return activity; }
     ICompressor *queryCompressor() const { return compressor; }
+
+    void process(IPropertyTree *requestTree, MemoryBuffer &restMb, MemoryBuffer &responseMb)
+    {
+        replyLimit = requestTree->getPropInt64("replyLimit", defaultDaFSReplyLimitKB) * 1024;
+
+        if (outFmt_Binary == format)
+            responseMb.append(cursorHandle);
+        else // outFmt_Xml || outFmt_Json
+            responseWriter->outputUInt(cursorHandle, sizeof(cursorHandle), "handle");
+
+        if (requestTree->hasProp("cursorBin")) // use handle if one provided
+        {
+            MemoryBuffer cursorMb;
+            cursorMb.setEndian(__BIG_ENDIAN);
+            JBASE64_Decode(requestTree->queryProp("cursorBin"), cursorMb);
+            activity->restoreCursor(cursorMb);
+        }
+
+        if (activity->queryIsReadActivity())
+            processRead(requestTree, responseMb);
+        else if (activity->queryIsWriteActivity())
+            processWrite(requestTree, restMb, responseMb);
+
+        if (outFmt_Binary != format)
+        {
+            responseWriter->outputEndNested("Response");
+            responseWriter->finalize();
+            PROGLOG("Response: %s", responseWriter->str());
+            responseMb.append(responseWriter->length(), responseWriter->str());
+        }
+    }
 };
 
 enum OpenFileFlag { of_null=0x0, of_key=0x01 };
@@ -4043,7 +4336,26 @@ static IOutputMetaData *getTypeInfoOutputMetaData(IPropertyTree &actNode, const 
     }
 }
 
-class CRemoteDiskBaseActivity : public CSimpleInterfaceOf<IRemoteActivity>, implements IVirtualFieldCallback
+static FileDescriptorFactoryType fileDescriptorFactory = nullptr;
+void configureRemoteCreateFileDescriptorCB(FileDescriptorFactoryType cb)
+{
+    if (!fileDescriptorFactory)
+        fileDescriptorFactory = cb;
+}
+
+FileDescriptorFactoryType queryRemoteCreateFileDescriptorCB()
+{
+    if (!fileDescriptorFactory)
+        throw makeStringException(0, "fileDescriptorFactory not configured");
+    return fileDescriptorFactory;
+}
+
+class CRemoteActivityBase : public CSimpleInterface
+{
+protected:
+};
+
+class CRemoteDiskBaseActivity : public CRemoteActivityBase, implements IRemoteReadActivity, implements IVirtualFieldCallback
 {
 protected:
     StringAttr fileName; // physical filename
@@ -4072,12 +4384,12 @@ protected:
         logicalFilename.set(config.queryProp("virtualFields/logicalFilename"));
     }
 public:
-    IMPLEMENT_IINTERFACE_USING(CSimpleInterfaceOf<IRemoteActivity>)
+    IMPLEMENT_IINTERFACE_USING(CRemoteActivityBase)
 
     CRemoteDiskBaseActivity(IPropertyTree &config)
     {
     }
-// IRemoteActivity impl.
+// IRemoteReadActivity impl.
     virtual unsigned __int64 queryProcessed() const override
     {
         return processed;
@@ -4097,6 +4409,10 @@ public:
     virtual void restoreCursor(MemoryBuffer &src) override
     {
         throwUnexpected();
+    }
+    virtual IRemoteReadActivity *queryIsReadActivity()
+    {
+        return this;
     }
 //interface IVirtualFieldCallback
     virtual const char * queryLogicalFilename(const void * row) override
@@ -4224,7 +4540,7 @@ public:
     {
         delete filterRow;
     }
-// IRemoteActivity impl.
+// IRemoteReadActivity impl.
     virtual const void *nextRow(MemoryBufferBuilder &outBuilder, size32_t &retSz) override
     {
         if (eogPending || eofSeen)
@@ -4315,7 +4631,7 @@ public:
 };
 
 
-IRemoteActivity *createRemoteDiskRead(IPropertyTree &actNode)
+IRemoteReadActivity *createRemoteDiskRead(IPropertyTree &actNode)
 {
     return new CRemoteDiskReadActivity(actNode);
 }
@@ -4383,7 +4699,7 @@ public:
 
         initCommon(config);
     }
-// IRemoteActivity impl.
+// IRemoteReadActivity impl.
     virtual const void *nextRow(MemoryBufferBuilder &outBuilder, size32_t &retSz) override
     {
         if (eofSeen)
@@ -4436,9 +4752,151 @@ public:
 };
 
 
-IRemoteActivity *createRemoteIndexRead(IPropertyTree &actNode)
+IRemoteReadActivity *createRemoteIndexRead(IPropertyTree &actNode)
 {
     return new CRemoteIndexReadActivity(actNode);
+}
+
+class CRemoteWriteBaseActivity : public CRemoteActivityBase, implements IRemoteWriteActivity
+{
+protected:
+    StringAttr fileName; // physical filename
+    Linked<IOutputMetaData> meta;
+    unsigned __int64 processed = 0;
+    bool opened = false;
+    bool eofSeen = false;
+
+    Owned<IFileIO> iFileIO;
+    bool grouped = false;
+
+
+    void initCommon(IPropertyTree &config)
+    {
+        fileName.set(config.queryProp("fileName"));
+        if (isEmptyString(fileName))
+            throw createDafsException(DAFSERR_cmdstream_protocol_failure, "CRemoteWriteBaseActivity: fileName missing");
+    }
+    void close()
+    {
+        iFileIO.clear();
+        opened = false;
+        eofSeen = true;
+    }
+public:
+    IMPLEMENT_IINTERFACE_USING(CRemoteActivityBase)
+
+    CRemoteWriteBaseActivity(IPropertyTree &config)
+    {
+        grouped = config.getPropBool("inputGrouped");
+        meta.setown(getTypeInfoOutputMetaData(config, "input", grouped));
+
+        initCommon(config);
+    }
+    ~CRemoteWriteBaseActivity()
+    {
+    }
+    virtual unsigned __int64 queryProcessed() const override
+    {
+        return processed;
+    }
+    virtual IOutputMetaData *queryOutputMeta() const override
+    {
+        return meta;
+    }
+    virtual bool isGrouped() const override
+    {
+        return grouped;
+    }
+    virtual void serializeCursor(MemoryBuffer &tgt) const override
+    {
+        throwUnexpected();
+    }
+    virtual void restoreCursor(MemoryBuffer &src) override
+    {
+        throwUnexpected();
+    }
+    virtual StringBuffer &getInfoStr(StringBuffer &out) const override
+    {
+        return out.appendf("diskwrite[%s]", fileName.get());
+    }
+    virtual void write(size32_t sz, const void *rowData) override
+    {
+        throwUnexpected(); // method should be implemented in derived classes.
+    }
+    virtual IRemoteWriteActivity *queryIsWriteActivity()
+    {
+        return this;
+    }
+};
+
+
+class CRemoteDiskWriteActivity : public CRemoteWriteBaseActivity
+{
+    typedef CRemoteWriteBaseActivity PARENT;
+
+    unsigned compressionFormat = 0;
+    mutable bool eogPending = false;
+    mutable bool someInGroup = false;
+    size32_t recordSize = 0;
+    Owned<IFileIOStream> iFileIOStream;
+
+    void checkOpen()
+    {
+        if (opened)
+            return;
+
+        OwnedIFile iFile = createIFile(fileName);
+        assertex(iFile);
+        if (compressionFormat)
+            iFileIO.setown(createCompressedFileWriter(iFile, recordSize, false, true, nullptr, compressionFormat));
+        else
+        {
+            iFileIO.setown(iFile->open(IFOcreate));
+            if (!iFileIO)
+                throw createDafsExceptionV(DAFSERR_cmdstream_protocol_failure, "Failed to open: '%s' for write", fileName.get());
+        }
+        iFileIOStream.setown(createIOStream(iFileIO));
+        opened = true;
+        eofSeen = false;
+    }
+public:
+    CRemoteDiskWriteActivity(IPropertyTree &config) : PARENT(config)
+    {
+        const char *compressed = config.queryProp("compressed"); // the compression format for the serialized rows in the transport
+        if (!isEmptyString(compressed))
+        {
+            // boolean or format allowed
+            if (strieq("true", compressed))
+                compressionFormat = translateToCompMethod(nullptr); // gets default
+            else if (strieq("false", compressed))
+                compressionFormat = 0;
+            else
+                compressionFormat = translateToCompMethod(compressed);
+        }
+    }
+    virtual void write(size32_t sz, const void *rowData) override
+    {
+        checkOpen();
+        iFileIOStream->write(sz, rowData);
+        if (grouped) // JCSMORE
+            UNIMPLEMENTED;
+    }
+    virtual void serializeCursor(MemoryBuffer &tgt) const override
+    {
+        tgt.append(iFileIOStream->tell());
+    }
+    virtual void restoreCursor(MemoryBuffer &src) override
+    {
+        offset_t pos;
+        src.read(pos);
+        checkOpen();
+        iFileIOStream->seek(pos, IFSbegin);
+    }
+};
+
+IRemoteWriteActivity *createRemoteDiskWrite(IPropertyTree &actNode)
+{
+    return new CRemoteDiskWriteActivity(actNode);
 }
 
 
@@ -4464,7 +4922,7 @@ public:
 
         initCommon(config);
     }
-// IRemoteActivity impl.
+// IRemoteReadActivity impl.
     virtual const void *nextRow(MemoryBufferBuilder &outBuilder, size32_t &retSz) override
     {
         if (eofSeen)
@@ -4492,7 +4950,7 @@ public:
 };
 
 
-IRemoteActivity *createRemoteIndexCount(IPropertyTree &actNode)
+IRemoteReadActivity *createRemoteIndexCount(IPropertyTree &actNode)
 {
     return new CRemoteIndexCountActivity(actNode);
 }
@@ -4550,9 +5008,6 @@ void verifyMetaInfo(IPropertyTree &actNode, bool authorizedOnly, const IProperty
     {
         metaInfo.setown(createPTree(metaInfoBlob));
 
-        // version for future use
-        unsigned securityVersion = metaInfo->getPropInt("version");
-
         const char *keyPairName = metaInfo->queryProp("keyPairName");
 
         StringBuffer metaInfoSignature;
@@ -4576,22 +5031,52 @@ void verifyMetaInfo(IPropertyTree &actNode, bool authorizedOnly, const IProperty
 #endif
         metaInfo.set(metaInfoEnvelope);
 
-    IPropertyTree *fileInfo = metaInfo->queryPropTree("FileInfo");
-    assertex(fileInfo);
-
-    // extra filename based on part/copy.
     assertex(actNode.hasProp("filePart"));
     unsigned partNum = actNode.getPropInt("filePart");
     assertex(partNum);
     unsigned partCopy = actNode.getPropInt("filePartCopy", 1);
 
-    VStringBuffer xpath("Part[%u]/Copy[%u]/@filePath", partNum, partCopy);
-    StringBuffer partFileName;
-    fileInfo->getProp(xpath, partFileName);
-    if (!partFileName.length())
-        throw createDafsException(DAFSERR_cmdstream_protocol_failure, "createRemoteActivity: invalid file info");
+    unsigned metaInfoVersion = metaInfo->getPropInt("version");
+    switch (metaInfoVersion)
+    {
+        case 0:
+            // implies unsigned direct request from engines (on unsecure port)
+            // fall through
+        case 1:
+        {
+            IPropertyTree *fileInfo = metaInfo->queryPropTree("FileInfo");
+            assertex(fileInfo);
 
-    actNode.setProp("fileName", partFileName.str());
+            VStringBuffer xpath("Part[%u]/Copy[%u]/@filePath", partNum, partCopy);
+            StringBuffer partFileName;
+            fileInfo->getProp(xpath, partFileName);
+            if (!partFileName.length())
+                throw createDafsException(DAFSERR_cmdstream_protocol_failure, "createRemoteActivity: invalid file info");
+
+            actNode.setProp("fileName", partFileName.str());
+            break;
+        }
+        case 2: // serialized compact IFileDescriptor
+        {
+            IPropertyTree *fileInfo = metaInfo->queryPropTree("FileInfo");
+
+            assertex(fileDescriptorFactory);
+            // may want to keep this for a little longer
+            Owned<IFileDescriptor> fileDesc = fileDescriptorFactory(fileInfo);
+
+            RemoteFilename rfn;
+            fileDesc->getFilename(partNum-1, partCopy-1, rfn);
+
+            StringBuffer path;
+            rfn.getLocalPath(path);
+
+            actNode.setProp("fileName", path.str());
+            break;
+        }
+        default:
+            throwUnexpected();
+    }
+
     verifyex(actNode.removeProp("metaInfo")); // no longer needed
 }
 
@@ -4610,6 +5095,10 @@ IRemoteActivity *createRemoteActivity(IPropertyTree &actNode, bool authorizedOnl
             kind = TAKindexread;
         else if (strieq("indexcount", kindStr))
             kind = TAKindexcount;
+        else if (strieq("diskwrite", kindStr))
+            kind = TAKdiskwrite;
+        else if (strieq("indexwrite", kindStr))
+            kind = TAKindexwrite;
         // else - auto-detect
     }
 
@@ -4631,7 +5120,12 @@ IRemoteActivity *createRemoteActivity(IPropertyTree &actNode, bool authorizedOnl
             activity.setown(createRemoteIndexCount(actNode));
             break;
         }
-        default: // auto-detect file format
+        case TAKdiskwrite:
+        {
+            activity.setown(createRemoteDiskWrite(actNode));
+            break;
+        }
+        default: // in absense of type, read is assumed and file format is auto-detected.
         {
             const char *action = actNode.queryProp("action");
             if (isIndexFile(partFileName))
@@ -4660,7 +5154,6 @@ IRemoteActivity *createRemoteActivity(IPropertyTree &actNode, bool authorizedOnl
             }
             break;
         }
-
     }
     return activity.getClear();
 }
@@ -5466,23 +5959,6 @@ class CRemoteFileServer : implements IRemoteFileServer, public CInterface
     };
 
 #define IMPERSONATE_USER(client) cImpersonateBlock ublock(client)
-
-    bool handleFull(MemoryBuffer &inMb, size32_t inPos, MemoryBuffer &compressMb, ICompressor *compressor, size32_t replyLimit, size32_t &totalSz)
-    {
-        size32_t sz = inMb.length()-inPos;
-        if (sz < replyLimit)
-            return false;
-
-        if (!compressor)
-            return true;
-
-        // consumes data from inMb into compressor
-        totalSz += sz;
-        const void *data = inMb.bytes()+inPos;
-        assertex(compressor->write(data, sz) == sz);
-        inMb.setLength(inPos);
-        return compressMb.capacity() > replyLimit;
-    }
 
     void validateSSLSetup()
     {
@@ -6389,17 +6865,22 @@ public:
         throw createDafsException(RFSERR_InvalidCommand, nullptr);
     }
 
-    void cmdStreamReadCommon(MemoryBuffer & msg, MemoryBuffer & reply, CRemoteClientHandler &client)
+    void cmdStreamGeneral(MemoryBuffer &msg, MemoryBuffer &reply, CRemoteClientHandler &client)
     {
-        size32_t jsonSz = msg.remaining();
+        size32_t jsonSz;
+        msg.read(jsonSz);
         Owned<IPropertyTree> requestTree = createPTreeFromJSONString(jsonSz, (const char *)msg.readDirect(jsonSz));
+        cmdStreamCommon(requestTree, msg, reply, client);
+    }
 
+    void cmdStreamCommon(IPropertyTree *requestTree, MemoryBuffer &rest, MemoryBuffer &reply, CRemoteClientHandler &client)
+    {
         /* Example JSON request:
          * {
          *  "format" : "binary",
          *  "handle" : "1234",
          *  "replyLimit" : "64",
-         *  "outputCompression" : "LZ4",
+         *  "commCompression" : "LZ4",
          *  "node" : {
          *   "kind" : "diskread",
          *   "fileName": "examplefilename",
@@ -6416,6 +6897,7 @@ public:
          *   }
          *  }
          * }
+         * OR
          * {
          *  "format" : "xml",
          *  "handle" : "1234",
@@ -6469,15 +6951,44 @@ public:
          *   },
          *  }
          * }
+         * OR
+         * {
+         *  "format" : "binary",
+         *  "handle" : "1234",
+         *  "replyLimit" : "64",
+         *  "commCompression" : "LZ4",
+         *  "node" : {
+         *   "kind" : "diskwrite",
+         *   "fileName": "examplefilename",
+         *   "compressed" : "false" (or "LZ4", "FLZ", "LZW")
+         *   "input" : {
+         *    "f1" : "string5",
+         *    "f2" : "string5"
+         *   }
+         *  }
+         * }
+         * OR
+         * {
+         *  "format" : "binary",
+         *  "handle" : "1234",
+         *  "replyLimit" : "64",
+         *  "node" : {
+         *   "kind" : "indexwrite",
+         *   "fileName": "examplefilename",
+         *   "input" : {
+         *    "f1" : "string5",
+         *    "f2" : "string5"
+         *   }
+         *  }
+         * }
          *
          */
 
         int cursorHandle = requestTree->getPropInt("handle");
         OutputFormat outputFormat = outFmt_Xml;
-        unsigned __int64 replyLimit = 0;
         Owned<ICompressor> compressor;
-        MemoryBuffer compressMb;
-
+        Owned<IExpander> expander;
+        Owned<CRemoteRequest> remoteRequest;
         Owned<IRemoteActivity> outputActivity;
         OpenFileInfo fileInfo;
         if (!cursorHandle)
@@ -6494,21 +7005,30 @@ public:
             else
                 throw MakeStringException(0, "Unrecognised output format: %s", outputFmtStr);
 
-            replyLimit = requestTree->getPropInt64("replyLimit", defaultDaFSReplyLimitKB) * 1024;
-
-            if (requestTree->hasProp("outputCompression"))
+            /* pre-version 2.4, "outputCompression" denoted data was compressed in communication protocol and only applied to reply row data
+             * Since 2.5 "commCompression" replaces "outputCompression", and applies to both incoming row data (write) and outgoing row data (read).
+             * But "outputCompression" is checked for backward compatibility.
+             */
+            if (requestTree->hasProp("outputCompression") || requestTree->hasProp("commCompression"))
             {
-                const char *outputCompressionType = requestTree->queryProp("outputCompression");
-                if (isEmptyString(outputCompressionType))
+                const char *commCompressionType = requestTree->queryProp("commCompression");
+                if (isEmptyString(commCompressionType))
+                    commCompressionType = requestTree->queryProp("outputCompression");
+
+                if (isEmptyString(commCompressionType))
+                {
                     compressor.setown(queryDefaultCompressHandler()->getCompressor());
+                    expander.setown(queryDefaultCompressHandler()->getExpander());
+                }
                 else if (outFmt_Binary == outputFormat)
                 {
-                    compressor.setown(getCompressor(outputCompressionType));
+                    compressor.setown(getCompressor(commCompressionType));
+                    expander.setown(getExpander(commCompressionType));
                     if (!compressor)
-                        WARNLOG("Unknown compressor type specified: %s", outputCompressionType);
+                        WARNLOG("Unknown compressor type specified: %s", commCompressionType);
                 }
                 else
-                    WARNLOG("Output compression not supported for format: %s", outputFmtStr);
+                    WARNLOG("Communication protocol compression not supported for format: %s", outputFmtStr);
             }
 
             /* NB: unless client call is on dedicated service, allow non-authorized requests through, e.g. from engines talking to unsecured port
@@ -6519,14 +7039,14 @@ public:
             // In future this may be passed the request and build a chain of activities and return sink.
             outputActivity.setown(createOutputActivity(*requestTree, authorizedOnly, keyPairInfo));
 
-            Owned<CRemoteRequest> remoteRequest = new CRemoteRequest(outputFormat, compressor, replyLimit, outputActivity);
+            cursorHandle = getNextHandle();
+            remoteRequest.setown(new CRemoteRequest(cursorHandle, outputFormat, compressor, expander, outputActivity));
 
             StringBuffer requestStr("jsonrequest:");
             outputActivity->getInfoStr(requestStr);
             Owned<StringAttrItem> name = new StringAttrItem(requestStr);
 
             CriticalBlock block(sect);
-            cursorHandle = getNextHandle();
             client.previdx = client.openFiles.ordinality();
             client.openFiles.append(OpenFileInfo(cursorHandle, remoteRequest, name));
         }
@@ -6534,231 +7054,27 @@ public:
             cursorHandle = 0; // challenge response ..
         else // known handle, continuation
         {
-            outputActivity.set(fileInfo.remoteRequest->queryActivity());
-            compressor.set(fileInfo.remoteRequest->queryCompressor());
+            remoteRequest.set(fileInfo.remoteRequest);
             outputFormat = fileInfo.remoteRequest->queryFormat();
-            replyLimit = fileInfo.remoteRequest->queryReplyLimit();
         }
 
-        if (outputActivity && requestTree->hasProp("cursorBin")) // use handle if one provided
-        {
-            MemoryBuffer cursorMb;
-            cursorMb.setEndian(__BIG_ENDIAN);
-            JBASE64_Decode(requestTree->queryProp("cursorBin"), cursorMb);
-            outputActivity->restoreCursor(cursorMb);
-        }
-
-        Owned<IXmlWriterExt> responseWriter; // for xml or json response
-        if (outFmt_Binary == outputFormat)
-            reply.append(cursorHandle);
-        else // outFmt_Xml || outFmt_Json
-        {
-            responseWriter.setown(createIXmlWriterExt(0, 0, nullptr, outFmt_Xml == outputFormat ? WTStandard : WTJSONObject));
-            responseWriter->outputBeginNested("Response", true);
-            if (outFmt_Xml == outputFormat)
-                responseWriter->outputCString("urn:hpcc:dfs", "@xmlns:dfs");
-            responseWriter->outputUInt(cursorHandle, sizeof(cursorHandle), "handle");
-        }
         if (cursorHandle)
-        {
-            IOutputMetaData *out = outputActivity->queryOutputMeta();
-            bool grouped = outputActivity->isGrouped();
-            bool eoi=false;
-
-            MemoryBuffer resultBuffer;
-            MemoryBufferBuilder outBuilder(resultBuffer, out->getMinRecordSize());
-            if (outFmt_Binary == outputFormat)
-            {
-                if (compressor)
-                {
-                    compressMb.setEndian(__BIG_ENDIAN);
-                    compressMb.append(reply);
-                }
-
-                DelayedMarker<size32_t> dataLenMarker(compressor ? compressMb : reply); // data length
-
-                if (compressor)
-                {
-                    size32_t initialSz = replyLimit >= 0x10000 ? 0x10000 : replyLimit;
-                    compressor->open(compressMb, initialSz);
-                }
-
-                outBuilder.setBuffer(reply); // write direct to reply buffer for efficiency
-                unsigned __int64 numProcessedStart = outputActivity->queryProcessed();
-                size32_t totalDataSz = 0;
-                size32_t dataStartPos = reply.length();
-
-                if (grouped)
-                {
-                    bool pastFirstRow = numProcessedStart>0;
-                    do
-                    {
-                        size32_t eogPos = 0;
-                        if (pastFirstRow)
-                        {
-                            /* this is for last row output, which might have been returned in the previous request
-                             * The eog marker may change as a result of the next row (see writeDirect() call below);
-                             */
-                            eogPos = reply.length();
-                            reply.append(false);
-                        }
-                        size32_t rowSz;
-                        const void *row = outputActivity->nextRow(outBuilder, rowSz);
-                        if (!row)
-                        {
-                            if (!pastFirstRow)
-                            {
-                                eoi = true;
-                                break;
-                            }
-                            else
-                            {
-                                bool eog = true;
-                                reply.writeDirect(eogPos, sizeof(eog), &eog);
-                                row = outputActivity->nextRow(outBuilder, rowSz);
-                                if (!row)
-                                {
-                                    eoi = true;
-                                    break;
-                                }
-                            }
-                        }
-                        pastFirstRow = true;
-                    }
-                    while (!handleFull(reply, dataStartPos, compressMb, compressor, replyLimit, totalDataSz));
-                }
-                else
-                {
-                    do
-                    {
-                        size32_t rowSz;
-                        const void *row = outputActivity->nextRow(outBuilder, rowSz);
-                        if (!row)
-                        {
-                            eoi = true;
-                            break;
-                        }
-                    }
-                    while (!handleFull(reply, dataStartPos, compressMb, compressor, replyLimit, totalDataSz));
-                }
-
-                // Consume any trailing data remaining
-                if (compressor)
-                {
-                    size32_t sz = reply.length()-dataStartPos;
-                    if (sz)
-                    {
-                        // consumes data built up in reply buffer into compressor
-                        totalDataSz += sz;
-                        const void *data = reply.bytes()+dataStartPos;
-                        assertex(compressor->write(data, sz) == sz);
-                        reply.setLength(dataStartPos);
-                    }
-                }
-
-                // finalize reply
-                dataLenMarker.write(compressor ? totalDataSz : reply.length()-dataStartPos);
-                DelayedSizeMarker cursorLenMarker(reply); // cursor length
-                if (!eoi)
-                    outputActivity->serializeCursor(reply);
-                cursorLenMarker.write();
-                if (compressor)
-                {
-                    // consume cursor into compressor
-                    size32_t sz = reply.length()-dataStartPos;
-                    const void *data = reply.bytes()+dataStartPos;
-                    assertex(compressor->write(data, sz) == sz);
-                    compressor->close();
-                    // now ready to swap compressed output into reply
-                    reply.swapWith(compressMb);
-                }
-            }
-            else
-            {
-                responseWriter->outputBeginArray("Row");
-                if (grouped)
-                {
-                    bool pastFirstRow = outputActivity->queryProcessed()>0;
-                    bool first = true;
-                    do
-                    {
-                        size32_t rowSz;
-                        const void *row = outputActivity->nextRow(outBuilder, rowSz);
-                        if (!row)
-                        {
-                            if (!pastFirstRow)
-                            {
-                                eoi = true;
-                                break;
-                            }
-                            else
-                            {
-                                row = outputActivity->nextRow(outBuilder, rowSz);
-                                if (!row)
-                                {
-                                    eoi = true;
-                                    break;
-                                }
-                                if (first) // possible if eog was 1st row on next packet
-                                    responseWriter->outputBeginNested("Row", false);
-                                responseWriter->outputBool(true, "dfs:Eog"); // field name cannot clash with an ecl field name
-                            }
-                        }
-                        if (pastFirstRow)
-                            responseWriter->outputEndNested("Row"); // close last row
-
-                        responseWriter->outputBeginNested("Row", false);
-                        out->toXML((const byte *)row, *responseWriter);
-                        resultBuffer.clear();
-                        pastFirstRow = true;
-                        first = false;
-                    }
-                    while (responseWriter->length() < replyLimit);
-                    if (pastFirstRow)
-                        responseWriter->outputEndNested("Row"); // close last row
-                }
-                else
-                {
-                    do
-                    {
-                        size32_t rowSz;
-                        const void *row = outputActivity->nextRow(outBuilder, rowSz);
-                        if (!row)
-                        {
-                            eoi = true;
-                            break;
-                        }
-                        responseWriter->outputBeginNested("Row", false);
-                        out->toXML((const byte *)row, *responseWriter);
-                        responseWriter->outputEndNested("Row");
-                        resultBuffer.clear();
-                    }
-                    while (responseWriter->length() < replyLimit);
-                }
-                responseWriter->outputEndArray("Row");
-                if (!eoi)
-                {
-                    MemoryBuffer cursorMb;
-                    cursorMb.setEndian(__BIG_ENDIAN);
-                    outputActivity->serializeCursor(cursorMb);
-                    StringBuffer cursorBinStr;
-                    JBASE64_Encode(cursorMb.toByteArray(), cursorMb.length(), cursorBinStr);
-                    responseWriter->outputString(cursorBinStr.length(), cursorBinStr.str(), "cursorBin");
-                }
-            }
-        }
-        if (outFmt_Binary != outputFormat)
-        {
-            responseWriter->outputEndNested("Response");
-            responseWriter->finalize();
-            PROGLOG("Response: %s", responseWriter->str());
-            reply.append(responseWriter->length(), responseWriter->str());
-        }
+            remoteRequest->process(requestTree, rest, reply);
     }
+
+    void cmdStreamReadCommon(MemoryBuffer & msg, MemoryBuffer & reply, CRemoteClientHandler &client)
+    {
+        size32_t jsonSz = msg.remaining();
+        Owned<IPropertyTree> requestTree = createPTreeFromJSONString(jsonSz, (const char *)msg.readDirect(jsonSz));
+        cmdStreamCommon(requestTree, msg, reply, client);
+    }
+
+
+    // NB: JSON header to message, for some requests (e.g. write), there will be trailing raw data (e.g. row data)
 
     void cmdStreamReadStd(MemoryBuffer & msg, MemoryBuffer & reply, CRemoteClientHandler &client)
     {
-        reply.append(RFEnoerror);
+        reply.append(RFEnoerror); // gets patched if there is a follow on error
         cmdStreamReadCommon(msg, reply, client);
     }
 
@@ -6769,7 +7085,7 @@ public:
          * i.e. return format is { len[unsigned4-bigendian], errorcode[unsigned4-bigendian], result } - where result format depends on request output type.
          * errorcode = 0 means no error
          */
-        reply.append(RFEnoerror);
+        reply.append(RFEnoerror); // gets patched if there is a follow on error
         cmdStreamReadCommon(msg, reply, client);
     }
 
@@ -6952,6 +7268,13 @@ public:
                 MAPCOMMAND(RFCsetthrottle, cmdSetThrottle); // legacy version
                 MAPCOMMAND(RFCsetthrottle2, cmdSetThrottle2);
                 // row service commands
+                case RFCStreamGeneral:
+                {
+                    checkAuthorizedStreamCommand(*client);
+                    reply.append(RFEnoerror); // gets patched if there is a follow on error
+                    cmdStreamGeneral(msg, reply, *client);
+                    break;
+                }
                 case RFCStreamRead:
                 {
                     checkAuthorizedStreamCommand(*client);
@@ -7573,7 +7896,6 @@ IRemoteFileServer * createRemoteFileServer(unsigned maxThreads, unsigned maxThre
 
 #ifdef _USE_CPPUNIT
 #include "unittests.hpp"
-
 #include "rmtfile.hpp"
 
 static unsigned serverPort = DAFILESRV_PORT+1; // do not use standard port, which if in a URL will be converted to local parth if IP is local

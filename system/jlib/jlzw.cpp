@@ -450,7 +450,7 @@ CLZWExpander::~CLZWExpander()
         free(outbuf);
 }
 
-size32_t CLZWExpander::init(const void *blk)
+size32_t CLZWExpander::init(const void *blk, size32_t blkSz)
 {
     dict.initdict();
     BE_MEMCPY4(&outlen,blk);
@@ -1458,7 +1458,7 @@ public:
             free(outbuf);
     }
 
-    size32_t  init(const void *blk) // returns size required
+    size32_t  init(const void *blk, size32_t blkSz) // returns size required
     {
         memcpy(&outlen,blk,sizeof(outlen));
         memcpy(&recsize,(unsigned char *)blk+sizeof(outlen),sizeof(recsize));
@@ -2611,13 +2611,13 @@ public:
     {
         exp.setown(createLZWExpander(true));
     }
-    size32_t init(const void *blk)
+    size32_t init(const void *blk, size32_t inDataSz)
     {
         // first decrypt
         const byte *p = (const byte *)blk;
         size32_t l = *(const size32_t *)p;
         aesDecrypt(key.get(),key.length(),p+sizeof(size32_t),l,compbuf);
-        return exp->init(compbuf.bufferBase());         
+        return exp->init(compbuf.bufferBase());
     }
 
     void   expand(void *target)

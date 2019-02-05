@@ -27,6 +27,10 @@
 #define REMOTE_API DECL_IMPORT
 #endif
 
+#define DAFILESRV_METAINFOVERSION 2
+
+#define DAFILESRV_STREAMREAD_MINVERSION 22
+#define DAFILESRV_STREAMGENERAL_MINVERSION 25
 
 enum ThrottleClass
 {
@@ -78,7 +82,7 @@ interface IRemoteRowServer : extends IInterface
     virtual StringBuffer &getStats(StringBuffer &stats, bool reset) = 0;
 };
 
-#define FILESRV_VERSION 24 // don't forget VERSTRING in sockfile.cpp
+#define FILESRV_VERSION 25 // don't forget VERSTRING in sockfile.cpp
 
 interface IKeyManager;
 interface IDelayedFile;
@@ -114,8 +118,18 @@ extern REMOTE_API IRemoteFileIO *createRemoteFilteredFile(SocketEndpoint &ep, co
 interface IIndexLookup;
 extern REMOTE_API IIndexLookup *createRemoteFilteredKey(SocketEndpoint &ep, const char * filename, unsigned crc, IOutputMetaData *actual, IOutputMetaData *projected, const RowFilter &fieldFilters, unsigned __int64 chooseNLimit);
 
+typedef unsigned char RemoteFileCommandType;
+extern REMOTE_API RemoteFileCommandType queryRemoteStreamCmd(); // used by testsocket only
+
+interface IFileDescriptor;
+typedef IFileDescriptor *(*FileDescriptorFactoryType)(IPropertyTree *);
+extern REMOTE_API void configureRemoteCreateFileDescriptorCB(FileDescriptorFactoryType cb);
+
 
 // client only
+
+// client only
+extern FileDescriptorFactoryType queryRemoteCreateFileDescriptorCB();
 extern void clientSetDaliServixSocketCaching(bool set);
 extern void clientDisconnectRemoteFile(IFile *file);
 extern void clientDisconnectRemoteIoOnExit(IFileIO *fileio,bool set);
@@ -134,8 +148,5 @@ extern bool clientAsyncCopyFileSection(const char *uuid,    // from genUUID - mu
 
 extern void clientSetRemoteFileTimeouts(unsigned maxconnecttime,unsigned maxreadtime);
 extern void clientAddSocketToCache(SocketEndpoint &ep,ISocket *socket);
-
-typedef unsigned char RemoteFileCommandType;
-extern REMOTE_API RemoteFileCommandType queryRemoteStreamCmd(); // used by testsocket only
 
 #endif
