@@ -3471,6 +3471,26 @@ unsigned getRemoteVersion(ISocket *origSock, StringBuffer &ver)
     return ret;
 }
 
+unsigned getCachedRemoteVersion(const SocketEndpoint &_ep)
+{
+    /* JCSMORE - add a SocketEndpoint->version cache
+     * Idea being, that clients will want to determine version and differentiate what they send
+     * But do not want the cost of asking each time!
+     * So have a 'getRemoteVersion' call ask once and store version, so next time it returns cached answer.
+     *
+     * May want to have timeout on cache entries, but can be long. Don't expect remote side to change often within lifetime of client.
+     */
+
+    // JCSMORE TBD (properly!)
+
+    SocketEndpoint ep = _ep;
+    setDafsEndpointPort(ep);
+    Owned<ISocket> socket = connectDafs(ep, 10000);
+    StringBuffer ver; // no needed, version encoded in return code
+    return getRemoteVersion(socket, ver);
+}
+
+
 /////////////////////////
 
 

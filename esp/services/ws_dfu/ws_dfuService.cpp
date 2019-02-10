@@ -45,11 +45,10 @@
 #include "dfuwu.hpp"
 #include "fverror.hpp"
 #include "nbcd.hpp"
+#include "thorcommon.hpp"
 
 #include "jstring.hpp"
 #include "exception_util.hpp"
-
-#include "ws_dfuService.hpp"
 
 #include "hqlerror.hpp"
 #include "hqlexpr.hpp"
@@ -60,6 +59,10 @@
 
 #include "jflz.hpp"
 #include "digisign.hpp"
+
+#include "wsdfuaccess/wsdfuaccess.hpp"
+
+#include "ws_dfuService.hpp"
 
 using namespace cryptohelper;
 
@@ -85,6 +88,7 @@ static const char *DFUFileIdSeparator = "|";
 static const char *DFUFileCreate_FileNamePostfix = ".wsdfucreate.tmp";
 static const char *DFUFileCreate_GroupNamePrefix = "wsdfucreate";
 static const char *ConfigurationDirectoryForDataCategory = "data";
+static std::atomic<unsigned> dfuCreateUniqId{1};
 
 const unsigned NODE_GROUP_CACHE_DEFAULT_TIMEOUT = 30*60*1000; //30 minutes
 
@@ -5866,7 +5870,7 @@ int CWsDfuEx::GetIndexData(IEspContext &context, bool bSchemaOnly, const char* i
     return iRet;
 }
 
-void CWsDfuEx::getFilePartsInfo(IEspContext &context, IFileDescriptor *fdesc, unsigned numParts, bool forFileCreate, IEspDFUFileAccessInfo &accessInfo)
+void CWsDfuEx::getFilePartsInfo(IEspContext &context, IFileDescriptor &fileDesc, bool forFileCreate, IEspDFUFileAccessInfo &accessInfo)
 {
     IArrayOf<IEspDFUFilePart> dfuParts;
     IArrayOf<IEspDFUPartLocation> dfuPartLocations;
@@ -5874,7 +5878,7 @@ void CWsDfuEx::getFilePartsInfo(IEspContext &context, IFileDescriptor *fdesc, un
     unsigned newLocationIndex = 0;
     MapStringTo<unsigned> partLocationMap;
     // NB: both CopyIndex and PartIndex are 1 based in response.
-    Owned<IPartDescriptorIterator> pi = fdesc->getIterator();
+    Owned<IPartDescriptorIterator> pi = fileDesc.getIterator();
     ForEach(*pi)
     {
         IPartDescriptor& part = pi->query();
@@ -5916,76 +5920,17 @@ void CWsDfuEx::getFilePartsInfo(IEspContext &context, IFileDescriptor *fdesc, un
         dfuParts.append(*filePart.getClear());
     }
 
-    accessInfo.setNumParts(numParts);
+    accessInfo.setNumParts(fileDesc.numParts());
     accessInfo.setFileParts(dfuParts);
     accessInfo.setFileLocations(dfuPartLocations);
 }
 
-static const char *securityInfoVersion="1";
-void CWsDfuEx::getFileMeta(StringBuffer &metaInfoStr, StringBuffer &expiryTime, const char *fileName,
-    IFileDescriptor *fDesc, IUserDescriptor *user, const char *jobId, const char *keyPairName, IConstDFUFileAccessRequestBase &req)
-{
-    // setup "expiryTime"
-    unsigned expirySecs = req.getExpirySeconds();
-    if (expirySecs > maxFileAccessExpirySeconds)
-        expirySecs = maxFileAccessExpirySeconds;
-    time_t now;
-    time(&now);
-    CDateTime expiryDt;
-    expiryDt.set(now + expirySecs);
-    expiryDt.getString(expiryTime);
-
-    Owned<IPropertyTree> metaInfoEnvelope = createPTree();
-    Owned<IPropertyTree> metaInfo = createPTree();
-    extractFilePartInfo(*metaInfo, *fDesc);
-
-    MemoryBuffer metaInfoMb;
-
-    /* NB: If file access security is disabled in the environment, or on a per cluster basis
-     * keyPairName will be blank. In that case the meta data is returned in plain format.
-     * NB2: Dafilesrv's would also require file access security to be disabled in that case,
-     * otherwise they will be denied access.
-     * Should be part of the same configuration setup.
-     */
-#ifdef _USE_OPENSSL
-    if (!isEmptyString(keyPairName)) // without it, meta data is not encrypted
-    {
-        metaInfo->setProp("version", securityInfoVersion);
-        metaInfo->setProp("logicalFilename", fileName);
-        metaInfo->setProp("jobId", jobId);
-        metaInfo->setProp("accessType", req.getAccessTypeAsString());
-        StringBuffer userStr;
-        if (user)
-            metaInfo->setProp("user", user->getUserName(userStr).str());
-        metaInfo->setProp("keyPairName", keyPairName);
-        metaInfo->setProp("expiryTime", expiryTime);
-
-        MemoryBuffer metaInfoBlob;
-        metaInfo->serialize(metaInfoBlob);
-
-        const char *privateKeyFName = env->getPrivateKeyPath(keyPairName);
-        Owned<CLoadedKey> privateKey = loadPrivateKeyFromFile(privateKeyFName, nullptr);
-        StringBuffer metaInfoSignature;
-        digiSign(metaInfoSignature, metaInfoBlob.length(), metaInfoBlob.bytes(), *privateKey);
-        metaInfoEnvelope->setProp("signature", metaInfoSignature);
-        metaInfoEnvelope->setPropBin("metaInfoBlob", metaInfoBlob.length(), metaInfoBlob.bytes());
-        metaInfoEnvelope->serialize(metaInfoMb.clear());
-    }
-    else
-#endif
-        metaInfo->serialize(metaInfoMb);
-
-    MemoryBuffer compressedMetaInfoMb;
-    fastLZCompressToBuffer(compressedMetaInfoMb, metaInfoMb.length(), metaInfoMb.bytes());
-    JBASE64_Encode(compressedMetaInfoMb.bytes(), compressedMetaInfoMb.length(), metaInfoStr, false);
-}
-
-void CWsDfuEx::getFileDafilesrvConfiguration(StringBuffer &keyPairName, unsigned &port, bool &secure, const char *cluster)
+void CWsDfuEx::getFileDafilesrvConfiguration(StringBuffer &keyPairName, unsigned &port, bool &secure, const char *group)
 {
     port = DEFAULT_ROWSERVICE_PORT;
     secure = false;
-    keyPairName.set(env->getClusterKeyPairName(cluster));
-    Owned<IConstDaFileSrvInfo> daFileSrvInfo = env->getDaFileSrvGroupInfo(cluster);
+    keyPairName.set(env->getClusterGroupKeyPairName(group));
+    Owned<IConstDaFileSrvInfo> daFileSrvInfo = env->getDaFileSrvGroupInfo(group);
     if (daFileSrvInfo)
     {
         port = daFileSrvInfo->getPort();
@@ -5993,20 +5938,17 @@ void CWsDfuEx::getFileDafilesrvConfiguration(StringBuffer &keyPairName, unsigned
     }
 }
 
-void CWsDfuEx::getFileDafilesrvConfiguration(StringBuffer &keyPairName, unsigned &retPort, bool &retSecure, IDistributedFile &file)
+void CWsDfuEx::getFileDafilesrvConfiguration(StringBuffer &keyPairName, unsigned &retPort, bool &retSecure, const char *fileName, std::vector<std::string> &groups)
 {
     retPort = DEFAULT_ROWSERVICE_PORT;
     retSecure = false;
-    unsigned numClusters = file.numClusters();
-    for (unsigned c=0; c<numClusters; c++)
+    unsigned c = 0;
+    for (auto &group: groups)
     {
-        StringBuffer clusterName;
-        const char *cluster = file.getClusterName(c, clusterName.clear()).str();
-
         StringBuffer _keyPairName;
         unsigned port;
         bool secure;
-        getFileDafilesrvConfiguration(_keyPairName, port, secure, cluster);
+        getFileDafilesrvConfiguration(_keyPairName, port, secure, group.c_str());
         if (0 == c)
         {
             keyPairName.set(_keyPairName);
@@ -6016,101 +5958,29 @@ void CWsDfuEx::getFileDafilesrvConfiguration(StringBuffer &keyPairName, unsigned
         else
         {
             if (!strsame(keyPairName, _keyPairName))
-                throwStringExceptionV(0, "Configuration issue - file '%s' is on multiple clusters, keys for file access must match", file.queryLogicalName());
+                throwStringExceptionV(0, "Configuration issue - file '%s' is on multiple clusters, keys for file access must match", fileName);
             if (retPort != port)
-                throwStringExceptionV(0, "Configuration issue - file '%s' is on multiple clusters, dafilesrv's port for file access must match", file.queryLogicalName());
+                throwStringExceptionV(0, "Configuration issue - file '%s' is on multiple clusters, dafilesrv's port for file access must match", fileName);
             if (retSecure != secure)
-                throwStringExceptionV(0, "Configuration issue - file '%s' is on multiple clusters, dafilesrv's security setting for file access must match", file.queryLogicalName());
+                throwStringExceptionV(0, "Configuration issue - file '%s' is on multiple clusters, dafilesrv's security setting for file access must match", fileName);
         }
+        ++c;
     }
 }
 
-void CWsDfuEx::getFileAccess(IEspContext &context, IUserDescriptor *udesc, SecAccessFlags accessType, IConstDFUFileAccessRequestBase &req, IEspDFUFileAccessInfo &accessInfo)
+void CWsDfuEx::getFileAccessInfo(IEspContext &context, IFileDescriptor &fileDesc, bool returnTypeInfo, IEspDFUFileAccessInfo &accessInfo)
 {
-    bool writePermissions = (accessType == SecAccess_Write) || (accessType == SecAccess_Full);
-    bool readPermissions = true; // by implication
-
-    StringBuffer fileName = req.getName();
-    if (!isEmptyString(req.getCluster()))
-        fileName.append("@").append(req.getCluster());
-
-    checkLogicalName(fileName, udesc, readPermissions, writePermissions, false, nullptr);
-
-    switch (accessType)
+    getFilePartsInfo(context, fileDesc, false, accessInfo);
+    if (returnTypeInfo)
     {
-        case SecAccess_Access:
-        case SecAccess_Read:
-            break;
-        default:
-        {
-            // NB - no handling for write/full at moment
-            return;
-        }
+        MemoryBuffer binLayout;
+        StringBuffer jsonLayout;
+        if (!getRecordFormatFromRtlType(binLayout, jsonLayout, fileDesc.queryProperties(), false, true))
+            getRecordFormatFromECL(binLayout, jsonLayout, fileDesc.queryProperties(), false, true);
+        if (returnTypeInfo && jsonLayout.length())
+            accessInfo.setRecordTypeInfoJson(jsonLayout.str());
     }
-    Owned<IDistributedFile> df = queryDistributedFileDirectory().lookup(fileName, udesc, false, false, true); // lock super-owners
-    if (!df)
-        throw MakeStringException(ECLWATCH_FILE_NOT_EXIST,"Cannot find file '%s'.", fileName.str());
-
-    Owned<IFileDescriptor> fileDesc = df->getFileDescriptor(req.getCluster());
-    CFileAccessRole role = req.getAccessRole();
-    switch (role)
-    {
-        case CFileAccessRole_Token:
-        {
-            break;
-        }
-        case CFileAccessRole_Engine:
-        {
-            /* JCSMORE - for now do nothing
-             * Ideally, would get the file tree here and add it to 'metaInfo' tree, i.e. outside of uncrypted secureInfo blob
-             * Then client could construct a IDistributeFile from it etc.
-             * However, the way the engines and IDistributedFile work at the moment, means that using this info
-             * at the client side would require a significant amount of refactoring of the IDistributedFile implementation.
-             * Not least because IDF allows updates via IPT -> Dali.
-             *
-             * So for now don't send anything, and rely on engine fetching the legacy way, i.e. direct from Dali, via lazy fetching etc.
-             */
-            break;
-        }
-        case CFileAccessRole_External:
-        {
-            getFilePartsInfo(context, fileDesc, df->numParts(), false, accessInfo);
-            if (req.getReturnJsonTypeInfo() || req.getReturnJsonTypeInfo())
-            {
-                MemoryBuffer binLayout;
-                StringBuffer jsonLayout;
-                if (!getRecordFormatFromRtlType(binLayout, jsonLayout, df->queryAttributes(), req.getReturnJsonTypeInfo(), req.getReturnJsonTypeInfo()))
-                    getRecordFormatFromECL(binLayout, jsonLayout, df->queryAttributes(), req.getReturnJsonTypeInfo(), req.getReturnJsonTypeInfo());
-                if (req.getReturnJsonTypeInfo() && jsonLayout.length())
-                    accessInfo.setRecordTypeInfoJson(jsonLayout.str());
-                if (req.getReturnBinTypeInfo() && binLayout.length())
-                    accessInfo.setRecordTypeInfoBin(binLayout);
-            }
-            break;
-        }
-        default:
-            throwUnexpected();
-    }
-
-    StringBuffer keyPairName;
-    unsigned port;
-    bool secure;
-    getFileDafilesrvConfiguration(keyPairName, port, secure, *df);
-
-    StringBuffer metaInfo, expiryTime;
-    getFileMeta(metaInfo, expiryTime, fileName, fileDesc, udesc, req.getJobId(), keyPairName, req);
-    accessInfo.setMetaInfoBlob(metaInfo);
-    accessInfo.setExpiryTime(expiryTime);
-    accessInfo.setFileAccessPort(port);
-    accessInfo.setFileAccessSSL(secure);
-
-    StringBuffer userName;
-    if (udesc)
-        udesc->getUserName(userName);
-    LOG(daliAuditLogCat,",FileAccess,EspProcess,READ,%s,%s,%s,jobid=%s,expirySecs=%d", req.getCluster(),
-        userName.str(), fileName.str(), req.getJobId(), req.getExpirySeconds());
 }
-
 
 SecAccessFlags translateToSecAccessFlags(CSecAccessType from)
 {
@@ -6130,21 +6000,149 @@ SecAccessFlags translateToSecAccessFlags(CSecAccessType from)
     }
 }
 
+/*
+ * createDFUFileAccess() and encodeDFUFileMeta() will normally be called by the DFU service
+ * via a DFS file request. So that the meta info blob can be returned to the client of the service.
+ * However, for testing purposes it's also useful to create these blobs elsewhere directly from IFileDescriptor's
+ */
+static IPropertyTree *createDFUFileMetaInfo(const char *fileName, IFileDescriptor *fileDesc, const char *requestId, const char *accessType, unsigned expirySecs,
+                                            IUserDescriptor *userDesc, const char *keyPairName, unsigned port, bool secure, unsigned maxFileAccessExpirySeconds)
+{
+    /*
+     * version
+     * fileName
+     * requestId [optional]
+     * accessType [const "READ" for this method]
+     * user
+     * port (int)      // port # of dafilesrv srvice to connect to
+     * secure (bool)   // if true = SSL connection
+     * keyPairName      // name of key pair to use
+     * expiryTime      // (seconds) timeout for validity of this request
+     * jsonTypeInfo     // JSON representation of the file's record definition
+     */
+    Owned<IPropertyTree> metaInfo = createPTree();
+
+    metaInfo->setProp("logicalFilename", fileName);
+    if (!isEmptyString(requestId))
+        metaInfo->setProp("requestId", requestId);
+    metaInfo->setProp("accessType", accessType);
+    StringBuffer userStr;
+    if (userDesc)
+        metaInfo->setProp("user", userDesc->getUserName(userStr).str());
+
+    // key, port, secure
+    metaInfo->setPropInt("port", port);
+    metaInfo->setPropBool("secure", secure);
+    if (!isEmptyString(keyPairName))
+        metaInfo->setProp("keyPairName", keyPairName);
+
+    // expiry time
+    if (expirySecs > maxFileAccessExpirySeconds)
+        expirySecs = maxFileAccessExpirySeconds;
+    time_t now;
+    time(&now);
+    CDateTime expiryDt;
+    expiryDt.set(now + expirySecs);
+    StringBuffer expiryTime;
+    expiryDt.getString(expiryTime);
+    metaInfo->setProp("expiryTime", expiryTime);
+
+    // layout
+    MemoryBuffer binLayout;
+    if (getDaliLayoutInfo(binLayout, fileDesc->queryProperties()))
+        metaInfo->setPropBin("binLayout", binLayout.length(), binLayout.toByteArray());
+
+    // file meta info
+    INode *node1 = fileDesc->queryNode(0);
+    SocketEndpoint ep = node1->endpoint();
+    unsigned dafilesrvVersion = getCachedRemoteVersion(node1->endpoint());
+
+    if (dafilesrvVersion < DAFILESRV_STREAMGENERAL_MINVERSION)
+    {
+        metaInfo->setPropInt("version", 1); // legacy format
+        extractFilePartInfo(*metaInfo, *fileDesc);
+    }
+    else
+    {
+        metaInfo->setPropInt("version", DAFILESRV_METAINFOVERSION);
+        IPropertyTree *fileInfoTree = metaInfo->setPropTree("FileInfo");
+        fileDesc->serializeTree(*fileInfoTree);
+    }
+    return metaInfo.getClear();
+}
+
+static StringBuffer &encodeDFUFileMeta(StringBuffer &metaInfoBlob, IPropertyTree *metaInfo, IConstEnvironment *environment)
+{
+    MemoryBuffer metaInfoMb;
+
+    /* NB: If file access security is disabled in the environment, or on a per cluster basis
+     * keyPairName will be blank. In that case the meta data is returned in plain format.
+     * NB2: Dafilesrv's would also require file access security to be disabled in that case,
+     * otherwise they will be denied access.
+     * Should be part of the same configuration setup.
+     */
+#ifdef _USE_OPENSSL
+    if (metaInfo->hasProp("keyPairName") && environment) // without it, meta data is not encrypted
+    {
+        MemoryBuffer metaInfoBlob;
+        metaInfo->serialize(metaInfoBlob);
+
+        const char *keyPairName = metaInfo->queryProp("keyPairName");
+        const char *privateKeyFName = environment->getPrivateKeyPath(keyPairName);
+        Owned<CLoadedKey> privateKey = loadPrivateKeyFromFile(privateKeyFName, nullptr);
+        StringBuffer metaInfoSignature;
+        digiSign(metaInfoSignature, metaInfoBlob.length(), metaInfoBlob.bytes(), *privateKey);
+
+        Owned<IPropertyTree> metaInfoEnvelope = createPTree();
+        metaInfoEnvelope->setProp("signature", metaInfoSignature);
+        metaInfoEnvelope->setPropBin("metaInfoBlob", metaInfoBlob.length(), metaInfoBlob.bytes());
+        metaInfoEnvelope->serialize(metaInfoMb.clear());
+    }
+    else
+#endif
+        metaInfo->serialize(metaInfoMb);
+
+    MemoryBuffer compressedMetaInfoMb;
+    fastLZCompressToBuffer(compressedMetaInfoMb, metaInfoMb.length(), metaInfoMb.bytes());
+    JBASE64_Encode(compressedMetaInfoMb.bytes(), compressedMetaInfoMb.length(), metaInfoBlob, false);
+    return metaInfoBlob;
+}
+
 bool CWsDfuEx::onDFUFileAccess(IEspContext &context, IEspDFUFileAccessRequest &req, IEspDFUFileAccessResponse &resp)
 {
     try
     {
-        IConstDFUFileAccessRequestBase &requestBase = req.getRequestBase();
-        SecAccessFlags accessType = translateToSecAccessFlags(requestBase.getAccessType());
-        if (SecAccess_None == accessType)
-        {
-            context.setAuthStatus(AUTH_STATUS_NOACCESS);
-            throw MakeStringException(ECLWATCH_DFU_ACCESS_DENIED, "WsDfu::DFUFileAccess - Permission denied.");
-        }
-        context.ensureFeatureAccess(FEATURE_URL, accessType, ECLWATCH_DFU_ACCESS_DENIED, "WsDfu::DFUFileAccess: Permission denied.");
+        context.ensureFeatureAccess(FEATURE_URL, SecAccess_Read, ECLWATCH_DFU_ACCESS_DENIED, "WsDfu::DFUFileAccess: Permission denied.");
 
-        if (isEmptyString(requestBase.getName()))
+        double version = context.getClientVersion();
+        StringBuffer fileName;
+        StringAttr cluster;
+        StringAttr requestId;
+        unsigned expirySecs;
+        bool returnTextResponse;
+
+        if (version < 1.50)
+        {
+            IConstDFUFileAccessRequestBase &requestBase = req.getRequestBase();
+            fileName.append(requestBase.getName());
+            cluster.set(requestBase.getCluster());
+            requestId.set(requestBase.getJobId());
+            expirySecs = requestBase.getExpirySeconds();
+            returnTextResponse = CFileAccessRole_External == requestBase.getAccessRole();
+        }
+        else
+        {
+            fileName.append(req.getName());
+            cluster.set(req.getCluster());
+            requestId.set(req.getRequestId());
+            expirySecs = req.getExpirySeconds();
+            returnTextResponse = req.getReturnTextResponse();
+        }
+        if (0 == fileName.length())
              throw MakeStringException(ECLWATCH_INVALID_INPUT, "No Name defined.");
+
+        if (cluster.length())
+            fileName.append("@").append(cluster);
 
         StringBuffer userID;
         context.getUserID(userID);
@@ -6155,7 +6153,51 @@ bool CWsDfuEx::onDFUFileAccess(IEspContext &context, IEspDFUFileAccessRequest &r
             userDesc.setown(createUserDescriptor());
             userDesc->set(userID.str(), context.queryPassword(), context.querySignature());
         }
-        getFileAccess(context, userDesc, accessType, requestBase, resp.updateAccessInfo());
+
+        checkLogicalName(fileName, userDesc, true, false, false, nullptr); // check for read permissions
+
+        Owned<IDistributedFile> df = queryDistributedFileDirectory().lookup(fileName, userDesc, false, false, true); // lock super-owners
+        if (!df)
+            throw MakeStringException(ECLWATCH_FILE_NOT_EXIST,"Cannot find file '%s'.", fileName.str());
+
+        IEspDFUFileAccessInfo &accessInfo = resp.updateAccessInfo();
+
+        Owned<IFileDescriptor> fileDesc = df->getFileDescriptor(cluster);
+
+        // NB: if file has copies on >1 cluster, they must share the same key
+
+        std::vector<std::string> groups;
+        unsigned numClusters = df->numClusters();
+        for (unsigned c=0; c<numClusters; c++)
+        {
+            StringBuffer clusterName;
+            const char *clusterGroup = df->getClusterName(c, clusterName.clear());
+            groups.push_back(clusterGroup);
+        }
+
+        StringBuffer keyPairName;
+        unsigned port;
+        bool secure;
+        getFileDafilesrvConfiguration(keyPairName, port, secure, fileName, groups);
+
+        Owned<IPropertyTree> metaInfo = createDFUFileMetaInfo(fileName, fileDesc, requestId, "READ", expirySecs, userDesc, keyPairName, port, secure, maxFileAccessExpirySeconds);
+        StringBuffer metaInfoBlob;
+        encodeDFUFileMeta(metaInfoBlob, metaInfo, env);
+        accessInfo.setMetaInfoBlob(metaInfoBlob);
+
+        if (returnTextResponse)
+        {
+            getFileAccessInfo(context, *fileDesc, true, accessInfo);
+
+            accessInfo.setExpiryTime(metaInfo->queryProp("keyPairName"));
+            accessInfo.setFileAccessPort(metaInfo->getPropInt("port"));
+            accessInfo.setFileAccessSSL(metaInfo->getPropBool("secure"));
+        }
+
+        StringBuffer userName;
+        if (userDesc)
+            userDesc->getUserName(userName);
+        LOG(daliAuditLogCat,",FileAccess,EspProcess,READ,%s,%s,%s,jobid=%s,expirySecs=%d", cluster.get(), userName.str(), fileName.str(), requestId.get(), expirySecs);
     }
     catch (IException *e)
     {
@@ -6245,117 +6287,130 @@ void CWsDfuEx::exportRecordDefinitionBinaryType(const char *recordDefinition, Me
         throw MakeStringException(ECLWATCH_INVALID_INPUT, "Failed in exportBinaryType.");
 }
 
-void CWsDfuEx::getFileAccessBeforePublish(IEspContext &context, const char *fileName, const char *cluster,
-    const char *jobId, MemoryBuffer& layoutBin, IFileDescriptor *fileDesc, IUserDescriptor *udesc,
-    IConstDFUFileAccessRequestBase &req, IEspDFUFileCreateResponse &resp)
-{
-    IEspDFUFileAccessInfo &accessInfo = resp.updateAccessInfo();
-    getFilePartsInfo(context, fileDesc, fileDesc->numParts(), true, accessInfo);
-
-    StringBuffer keyPairName;
-    unsigned port;
-    bool secure;
-    getFileDafilesrvConfiguration(keyPairName, port, secure, cluster);
-
-    StringBuffer metaInfo, expiryTime;
-    getFileMeta(metaInfo, expiryTime, fileName, fileDesc, udesc, jobId, keyPairName, req);
-    accessInfo.setMetaInfoBlob(metaInfo);
-    accessInfo.setExpiryTime(expiryTime);
-
-    if (layoutBin.length() == 0)
-    {
-        if (!req.getReturnJsonTypeInfo() && !req.getReturnBinTypeInfo())
-            return;
-        resp.setWarning("RecordTypeInfoBin or RecordTypeInfoJson requested, but no type info found from ECLRecordDefinition");
-    }
-
-    if (req.getReturnJsonTypeInfo())
-    {
-        StringBuffer jsonLayout;
-        Owned<IRtlFieldTypeDeserializer> deserializer(createRtlFieldTypeDeserializer());
-        const RtlTypeInfo *typeInfo = deserializer->deserialize(layoutBin);
-        dumpTypeInfo(jsonLayout, typeInfo);
-        if (jsonLayout.length())
-            accessInfo.setRecordTypeInfoJson(jsonLayout.str());
-    }
-    if (req.getReturnBinTypeInfo())
-    {
-        MemoryBuffer binLayout;
-        layoutBin.swapWith(binLayout);
-        if (binLayout.length())
-            accessInfo.setRecordTypeInfoBin(binLayout);
-    }
-}
-
 bool CWsDfuEx::onDFUFileCreate(IEspContext &context, IEspDFUFileCreateRequest &req, IEspDFUFileCreateResponse &resp)
 {
     try
     {
-        IConstDFUFileAccessRequestBase &requestBase = req.getRequestBase();
-        SecAccessFlags accessType = translateToSecAccessFlags(requestBase.getAccessType());
-        if (SecAccess_None == accessType)
+        context.ensureFeatureAccess(FEATURE_URL, SecAccess_Write, ECLWATCH_DFU_ACCESS_DENIED, "WsDfu::DFUFileCreate: Permission denied.");
+
+        double version = context.getClientVersion();
+
+        const char *fileName;
+        const char *clusterName;
+        const char *recordDefinition;
+        unsigned expirySecs;
+        Owned<IGroup> group;
+        StringBuffer requestId;
+        bool returnTextResponse;
+        if (version < 1.50)
         {
-            context.setAuthStatus(AUTH_STATUS_NOACCESS);
-            throw MakeStringException(ECLWATCH_DFU_ACCESS_DENIED, "WsDfu::DFUFileCreate - Permission denied.");
+            IConstDFUFileAccessRequestBase &requestBase = req.getRequestBase();
+            fileName = requestBase.getName();
+            clusterName = requestBase.getCluster();
+            recordDefinition = req.getECLRecordDefinition();
+            requestId.append(requestBase.getJobId());
+            expirySecs = requestBase.getExpirySeconds();
+            returnTextResponse = true;
         }
-        context.ensureFeatureAccess(FEATURE_URL, accessType, ECLWATCH_DFU_ACCESS_DENIED, "WsDfu::DFUFileCreate: Permission denied.");
-
-        const char *fileName = requestBase.getName();
-        const char *clusterName = requestBase.getCluster();
-        const char *recordDefinition = req.getECLRecordDefinition();
+        else
+        {
+            fileName = req.getName();
+            clusterName = req.getCluster();
+            recordDefinition = req.getECLRecordDefinition();
+            requestId.append(req.getRequestId());
+            expirySecs = req.getExpirySeconds();
+            returnTextResponse = req.getReturnTextResponse();
+        }
         if (isEmptyString(fileName))
-             throw MakeStringException(ECLWATCH_INVALID_INPUT, "No Name defined.");
+             throw makeStringExceptionV(ECLWATCH_INVALID_INPUT, "No Name defined.");
         if (isEmptyString(clusterName))
-             throw MakeStringException(ECLWATCH_INVALID_INPUT, "No Cluster defined.");
+             throw makeStringExceptionV(ECLWATCH_INVALID_INPUT, "No Cluster defined.");
         if (isEmptyString(recordDefinition))
-             throw MakeStringException(ECLWATCH_INVALID_INPUT, "No ECLRecordDefinition defined.");
-
-        ClusterType clusterType = getClusterTypeByClusterName(clusterName);
-        if (clusterType == NoCluster)
-             throw MakeStringException(ECLWATCH_INVALID_INPUT, "Cluster %s not found.", clusterName);
-
-        const char *clusterTypeEx = clusterTypeString(clusterType, false);
-
-        StringBuffer groupName;
-        Owned<IGroup> group = getDFUFileIGroup(clusterName, clusterType, clusterTypeEx, req.getPartLocations(), groupName);
-
-        MemoryBuffer layoutBin;
-        exportRecordDefinitionBinaryType(recordDefinition, layoutBin);
+             throw makeStringExceptionV(ECLWATCH_INVALID_INPUT, "No ECLRecordDefinition defined.");
 
         StringBuffer userId;
-        Owned<IUserDescriptor> userDesc;
         context.getUserID(userId);
+        Owned<IUserDescriptor> userDesc;
         if (!userId.isEmpty())
         {
             userDesc.setown(createUserDescriptor());
             userDesc->set(userId.str(), context.queryPassword(), context.querySignature());
         }
 
-        StringBuffer tempFileName = fileName;
-        tempFileName.append(DFUFileCreate_FileNamePostfix);
+        checkLogicalName(fileName, userDesc, false, true, false, nullptr);
 
-        StringBuffer jobId = requestBase.getJobId();
-        if (jobId.isEmpty())
-            jobId.appendf("Create %s on %s", tempFileName.str(), clusterName);
+        ClusterType clusterType = getClusterTypeByClusterName(clusterName);
+        if (clusterType == NoCluster)
+             throw makeStringExceptionV(ECLWATCH_INVALID_INPUT, "Cluster %s not found.", clusterName);
 
-        Owned<IFileDescriptor> fileDesc = createFileDescriptor(tempFileName, clusterTypeEx, groupName, group);
-        fileDesc->queryProperties().setProp("@job", jobId);
+        CDfsLogicalFileName lfn;
+        lfn.set(fileName);
+        StringBuffer tempFileName = lfn.get();
+        StringBuffer groupName;
+        if (version < 1.50)
+        {
+            const char *clusterTypeEx = clusterTypeString(clusterType, false);
+            group.setown(getDFUFileIGroup(clusterName, clusterType, clusterTypeEx, req.getPartLocations(), groupName));
+
+            tempFileName.append(DFUFileCreate_FileNamePostfix);
+
+            //create FileId
+            StringBuffer fileID;
+            fileID.set(groupName.str()).append(DFUFileIdSeparator).append(clusterName).append(DFUFileIdSeparator).append(tempFileName.str());
+            resp.setFileId(fileID.str());
+        }
+        else
+        {
+            getClusterGroupName(groupName, clusterName);
+            if (isEmptyString(groupName))
+                 throw makeStringExceptionV(ECLWATCH_INVALID_INPUT, "Group for cluster %s not found.", clusterName);
+            group.setown(queryNamedGroupStore().lookup(groupName.str()));
+            if (!group)
+                throw makeStringExceptionV(ECLWATCH_INVALID_INPUT, "Failed to get Group %s.", groupName.str());
+
+            tempFileName.append(".").append(dfuCreateUniqId++); // avoid potential clash if >1 creating file. One will succeed at publish time.
+            tempFileName.append(DFUFileCreate_FileNamePostfix);
+        }
+
+        if (requestId.isEmpty())
+            requestId.appendf("Create %s on %s", tempFileName.str(), clusterName);
+
+        Owned<IFileDescriptor> fileDesc = createFileDescriptor(tempFileName, clusterTypeString(clusterType, false), groupName, group);
+        fileDesc->queryProperties().setProp("@job", requestId);
         if (!userId.isEmpty())
             fileDesc->queryProperties().setProp("@owner", userId);
+        fileDesc->queryProperties().setProp("ECL", recordDefinition);
 
-        Owned<IDistributedFile> file = queryDistributedFileDirectory().createNew(fileDesc);
-        file->setAccessed();
-        file->setECL(recordDefinition);
-        file->queryAttributes().setPropBin("_rtlType", layoutBin.length(), layoutBin.toByteArray());
-        file->queryAttributes().setPropInt64("@recordCount", 0);
-        file->queryAttributes().setPropInt64("@size", 0);
+        MemoryBuffer layoutBin;
+        exportRecordDefinitionBinaryType(recordDefinition, layoutBin);
+        if (0 == layoutBin.length())
+            throw makeStringExceptionV(ECLWATCH_INVALID_ECLRECDEF, "Failed to parse ECL record definition: %s.", recordDefinition);
+        fileDesc->queryProperties().setPropBin("_rtlType", layoutBin.length(), layoutBin.toByteArray());
 
-        getFileAccessBeforePublish(context, tempFileName, clusterName, jobId, layoutBin, fileDesc, userDesc, requestBase, resp);
+        // NB: if file has copies on >1 cluster, they must share the same key
+        StringBuffer keyPairName;
+        unsigned port;
+        bool secure;
 
-        //create FileId
-        StringBuffer fileID;
-        fileID.set(groupName.str()).append(DFUFileIdSeparator).append(clusterName).append(DFUFileIdSeparator).append(tempFileName.str());
-        resp.setFileId(fileID.str());
+        std::vector<std::string> groups;
+        groups.push_back(groupName.str());
+        getFileDafilesrvConfiguration(keyPairName, port, secure, fileName, groups);
+
+        Owned<IPropertyTree> metaInfo = createDFUFileMetaInfo(tempFileName, fileDesc, requestId, "WRITE", expirySecs, userDesc, keyPairName, port, secure, maxFileAccessExpirySeconds);
+        metaInfo->setProp("clusterName", clusterName);
+
+        StringBuffer metaInfoBlob;
+        encodeDFUFileMeta(metaInfoBlob, metaInfo, env);
+
+        IEspDFUFileAccessInfo &accessInfo = resp.updateAccessInfo();
+        accessInfo.setMetaInfoBlob(metaInfoBlob);
+        if (returnTextResponse)
+        {
+            getFileAccessInfo(context, *fileDesc, true, accessInfo);
+            accessInfo.setExpiryTime(metaInfo->queryProp("keyPairName"));
+            accessInfo.setFileAccessPort(metaInfo->getPropInt("port"));
+            accessInfo.setFileAccessSSL(metaInfo->getPropBool("secure"));
+        }
     }
     catch (IException *e)
     {
@@ -6370,49 +6425,15 @@ bool CWsDfuEx::onDFUFilePublish(IEspContext &context, IEspDFUFilePublishRequest 
     {
         context.ensureFeatureAccess(FEATURE_URL, SecAccess_Write, ECLWATCH_DFU_ACCESS_DENIED, "WsDfu::DFUFilePublish: Permission denied.");
 
+        double version = context.getClientVersion();
+
         const char *fileId = req.getFileId();
-        const char *recordDefinition = req.getECLRecordDefinition();
         if (isEmptyString(fileId))
-             throw MakeStringException(ECLWATCH_INVALID_INPUT, "No FileId defined.");
-        if (isEmptyString(recordDefinition))
-             throw MakeStringException(ECLWATCH_INVALID_INPUT, "No ECLRecordDefinition defined.");
+             throw makeStringException(ECLWATCH_INVALID_INPUT, "No FileId defined.");
 
-        StringArray fileIdItems;
-        fileIdItems.appendList(fileId, DFUFileIdSeparator);
-        if (fileIdItems.ordinality() < 3)
-            throw MakeStringException(ECLWATCH_INVALID_INPUT, "Invalid FileId '%s'.", fileId);
+        Owned<IFileDescriptor> fileDesc;
 
-        const char *groupName = fileIdItems.item(0);
-        const char *clusterName = fileIdItems.item(1);
-        const char *tempFileName = fileIdItems.item(2);
-        if (isEmptyString(groupName))
-             throw MakeStringException(ECLWATCH_INVALID_INPUT, "Invalid FileId: empty groupName.");
-        if (isEmptyString(clusterName))
-             throw MakeStringException(ECLWATCH_INVALID_INPUT, "Invalid FileId: empty clusterName.");
-        if (isEmptyString(tempFileName))
-             throw MakeStringException(ECLWATCH_INVALID_INPUT, "Invalid FileId: empty FileName.");
-
-        StringBuffer userId, newFileName;
-        newFileName.set(tempFileName);
-        if (newFileName.length() <= strlen(DFUFileCreate_FileNamePostfix))
-            throw MakeStringException(ECLWATCH_INVALID_INPUT, "Invalid FileId: cannot read FileName from %s.", tempFileName);
-        newFileName.setLength(newFileName.length() - strlen(DFUFileCreate_FileNamePostfix)); //remove DFUFileCreate_FileNamePostfix
-
-        ClusterType clusterType = getClusterTypeByClusterName(clusterName);
-        if (clusterType == NoCluster)
-             throw MakeStringException(ECLWATCH_INVALID_INPUT, "Cluster %s not found.", clusterName);
-
-        const char *clusterTypeEx = clusterTypeString(clusterType, false);
-
-        GroupType groupType;
-        StringBuffer basedir;
-        Owned<IGroup> group = queryNamedGroupStore().lookup(groupName, basedir, groupType);
-        if (!group)
-            throw MakeStringException(ECLWATCH_FILE_NOT_EXIST, "Failed to find group %s.", groupName);
-
-        MemoryBuffer layoutBin;
-        exportRecordDefinitionBinaryType(recordDefinition, layoutBin);
-
+        StringBuffer userId;
         Owned<IUserDescriptor> userDesc;
         context.getUserID(userId);
         if (!userId.isEmpty())
@@ -6421,28 +6442,112 @@ bool CWsDfuEx::onDFUFilePublish(IEspContext &context, IEspDFUFilePublishRequest 
             userDesc->set(userId.str(), context.queryPassword(), context.querySignature());
         }
 
-        VStringBuffer jobId("Publish %s on %s", newFileName.str(), clusterName);
-        Owned<IFileDescriptor> fileDesc = createFileDescriptor(tempFileName, clusterTypeEx, groupName, group);
+        const char *recordDefinition = req.getECLRecordDefinition();
+
+        StringArray fileIdItems;
+        fileIdItems.appendList(fileId, DFUFileIdSeparator);
+        if (fileIdItems.ordinality() < 3)
+            throw makeStringExceptionV(ECLWATCH_INVALID_INPUT, "Invalid FileId '%s'.", fileId);
+
+        const char *groupName = fileIdItems.item(0);
+        const char *clusterName = fileIdItems.item(1);
+        const char *tempFileName = fileIdItems.item(2);
+        if (isEmptyString(groupName))
+             throw makeStringException(ECLWATCH_INVALID_INPUT, "Invalid FileId: empty groupName.");
+        if (isEmptyString(clusterName))
+             throw makeStringException(ECLWATCH_INVALID_INPUT, "Invalid FileId: empty clusterName.");
+        if (isEmptyString(tempFileName))
+             throw makeStringException(ECLWATCH_INVALID_INPUT, "Invalid FileId: empty FileName.");
+
+        GroupType groupType;
+        StringBuffer basedir;
+        Owned<IGroup> group = queryNamedGroupStore().lookup(groupName, basedir, groupType);
+        if (!group)
+            throw makeStringExceptionV(ECLWATCH_FILE_NOT_EXIST, "Failed to find group %s.", groupName);
+
+        ClusterType clusterType = getClusterTypeByClusterName(clusterName);
+        const char *clusterTypeEx = clusterTypeString(clusterType, false);
+
+        StringBuffer newFileName;
+        if (version < 1.50) // legacy
+        {
+            newFileName.set(tempFileName);
+            if (newFileName.length() <= strlen(DFUFileCreate_FileNamePostfix))
+                throw makeStringExceptionV(ECLWATCH_INVALID_INPUT, "Invalid FileId: cannot read FileName from %s.", tempFileName);
+            newFileName.setLength(newFileName.length() - strlen(DFUFileCreate_FileNamePostfix)); //remove DFUFileCreate_FileNamePostfix
+
+            fileDesc.setown(createFileDescriptor(tempFileName, clusterTypeEx, groupName, group));
+
+            if (isEmptyString(recordDefinition))
+                 throw makeStringException(ECLWATCH_INVALID_INPUT, "No ECLRecordDefinition defined.");
+        }
+        else
+        {
+            CDfsLogicalFileName lfn;
+            lfn.set(tempFileName);
+            newFileName.set(lfn.get());
+            size32_t postFixLen = strlen(DFUFileCreate_FileNamePostfix);
+            if (newFileName.length() <= postFixLen)
+                throw makeStringExceptionV(ECLWATCH_INVALID_INPUT, "Invalid tempory filename: %s.", fileId);
+            const char *start = newFileName;
+            const char *pos = start + (newFileName.length() - postFixLen);
+            if (!streq(pos, DFUFileCreate_FileNamePostfix))
+                throw makeStringExceptionV(ECLWATCH_INVALID_INPUT, "Invalid tempory filename: %s.", fileId);
+            while (true)
+            {
+                --pos;
+                if (pos == start)
+                    throw makeStringExceptionV(ECLWATCH_INVALID_INPUT, "Invalid tempory filename: %s.", fileId);
+                if ('.' == *pos)
+                    break;
+            }
+            newFileName.setLength(pos-start);
+
+            const MemoryBuffer &fDescBlob = req.getFileDescriptorBlob();
+            if (fDescBlob.length())
+            {
+                MemoryBuffer mb;
+                mb.setBuffer(fDescBlob.length(), (void *)fDescBlob.toByteArray());
+                fileDesc.setown(deserializeFileDescriptor(mb));
+            }
+            else
+                fileDesc.setown(createFileDescriptor(tempFileName, clusterTypeEx, groupName, group));
+        }
+        if (!isEmptyString(recordDefinition))
+        {
+            MemoryBuffer layoutBin;
+            exportRecordDefinitionBinaryType(recordDefinition, layoutBin);
+            fileDesc->queryProperties().setPropBin("_rtlType", layoutBin.length(), layoutBin.toByteArray());
+            fileDesc->queryProperties().setProp("ECL", recordDefinition);
+        }
+        if (!req.getRecordCount_isNull())
+            fileDesc->queryProperties().setPropInt64("@recordCount", req.getRecordCount());
+        if (!req.getFileSize_isNull())
+            fileDesc->queryProperties().setPropInt64("@size", req.getFileSize());
+
+        Owned<IDistributedFile> df = queryDistributedFileDirectory().lookup(newFileName, userDesc, false, false, true);
+        if (df)
+        {
+            if (!req.getOverwrite())
+                throw makeStringExceptionV(ECLWATCH_FILE_ALREADY_EXISTS, "File already exists (%s) and overwrite not specified.", newFileName.str());
+            df->detach(30000);
+        }
+
         Owned<IDistributedFile> oldFile = queryDistributedFileDirectory().createNew(fileDesc);
         oldFile->validate();
 
-        if (!oldFile->renamePhysicalPartFiles(newFileName.str(), nullptr, nullptr, nullptr))
-            throw MakeStringException(ECLWATCH_FILE_NOT_EXIST, "Failed in renamePhysicalPartFiles %s.", newFileName.str());
+        CDfsLogicalFileName newLfn;
+        newLfn.set(newFileName);
+        if (!oldFile->renamePhysicalPartFiles(newLfn.queryTail(), nullptr, nullptr, fileDesc->queryDefaultDir()))
+            throw makeStringExceptionV(ECLWATCH_FILE_NOT_EXIST, "Failed in renamePhysicalPartFiles %s.", newFileName.str());
 
-        Owned<IFileDescriptor> newFileDesc = createFileDescriptor(newFileName, clusterTypeEx, groupName, group);
-        newFileDesc->queryProperties().setProp("@job", jobId);
-        if (!userId.isEmpty())
-            newFileDesc->queryProperties().setProp("@owner", userId);
+        StringBuffer newMask;
+        getPartMask(newMask, newFileName, fileDesc->numParts());
+        fileDesc->setPartMask(newMask);
 
-        Owned<IDistributedFile> newFile = queryDistributedFileDirectory().createNew(newFileDesc);
+        Owned<IDistributedFile> newFile = queryDistributedFileDirectory().createNew(fileDesc);
         newFile->setAccessed();
-        newFile->setECL(recordDefinition);
-        newFile->queryAttributes().setPropBin("_rtlType", layoutBin.length(), layoutBin.toByteArray());
-        if (!req.getRecordCount_isNull())
-            newFile->queryAttributes().setPropInt64("@recordCount", req.getRecordCount());
-        if (!req.getFileSize_isNull())
-            newFile->queryAttributes().setPropInt64("@size", req.getFileSize());
-        newFile->attach(newFileName.str(), userDesc);
+        newFile->attach(newFileName, userDesc);
 
         LOG(daliAuditLogCat,",FileAccess,EspProcess,CREATED,%s,%s,%s", groupName, userId.str(), newFileName.str());
     }
@@ -6452,5 +6557,7 @@ bool CWsDfuEx::onDFUFilePublish(IEspContext &context, IEspDFUFilePublishRequest 
     }
     return true;
 }
+
+
 
 //////////////////////HPCC Browser//////////////////////////

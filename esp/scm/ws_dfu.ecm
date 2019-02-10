@@ -833,6 +833,7 @@ ESPresponse [exceptions_inline, nil_remove] EraseHistoryResponse
     ESParray<ESPStruct History, Origin> History;
 };
 
+// NB: DFUFileAccessRequestBase deprecated - depr_ver("1.50")
 ESPStruct DFUFileAccessRequestBase
 {
     string Name;
@@ -847,7 +848,14 @@ ESPStruct DFUFileAccessRequestBase
 
 ESPrequest DFUFileAccessRequest
 {
-    EspStruct DFUFileAccessRequestBase RequestBase;
+    [min_ver("1.50")] string Name;                        // the logical file name
+    [min_ver("1.50")] string Cluster;                     // needed only if on >1 Cluster and want to disambiguate
+    [min_ver("1.50")] string RequestId;                   // optional
+    [min_ver("1.50")] int ExpirySeconds(60);              // how long the retrieved meta info is valid for, to access physical files (in dafilesrv)
+    [min_ver("1.50")] bool ReturnTextResponse(false);     // Returns response in full not just in blob    
+
+// legacy request format only
+    [depr_ver("1.50")] EspStruct DFUFileAccessRequestBase RequestBase;
 };
 
 ESPStruct DFUPartLocation
@@ -871,44 +879,72 @@ ESPStruct DFUFilePart
 
 ESPStruct DFUFileAccessInfo
 {
-    string MetaInfoBlob;
-    string ExpiryTime;
-    // {NumParts, FileParts} depend on ReturnFileInfo in request
-    int NumParts;        // number of parts in logical file
-    ESParray<EspStruct DFUPartLocation> FileLocations;
-    ESParray<EspStruct DFUFilePart> FileParts;
+    string MetaInfoBlob;                               // Contains serialized from of all meta data required + signature if security enabled
+    string ExpiryTime;                                 // After this time, the meta information cannot be used to communicate with dafilesrv's 
+    int NumParts;                                      // number of parts in logical file
+    ESParray<EspStruct DFUPartLocation> FileLocations; // List of hosts of parts  
+    ESParray<EspStruct DFUFilePart> FileParts;         // File parts. NB: these reference (index) the FileLocations 
     
-    binary RecordTypeInfoBin;   // optional
-    string RecordTypeInfoJson;  // optional
+    [depr_ver("1.50")] binary RecordTypeInfoBin;       // Binary encoded type info (also contained in metablob)
+    string RecordTypeInfoJson;                         // JSON encoded type info
     
-    int fileAccessPort;
-    bool fileAccessSSL;
+    int fileAccessPort;                                // dafilesrv port
+    bool fileAccessSSL;                                // use secure SSL?
 };
 
 ESPresponse [exceptions_inline] DFUFileAccessResponse
 {
-    EspStruct DFUFileAccessInfo AccessInfo;
+    /* AccessInfo.MetaInfoBlob contains everything, inc. signature.
+     * We want like this (and not as separate EspStruct) access members,
+     * because:
+     * a) it is more efficient for the factoried object to decode the bare bones meta info.
+     * b) the object can efficiently be serialized and passed to others (e.g. thormaster to slaves, to dafilesrv)
+     *
+     * NB: The other DFUFileAccessInfo fields are only returned if ReturnTextResponse is true in the request 
+     */
+    EspStruct DFUFileAccessInfo AccessInfo; 
+};
+
+
+ESPenum DFUFileType : string
+{
+    Flat("Flat"),
+    Index("Index"),
+    Xml("Xml"),
+    Csv("Csv"),
 };
 
 ESPrequest [nil_remove] DFUFileCreateRequest
 {
-    string ECLRecordDefinition;
-    ESParray<string> PartLocations;
-    EspStruct DFUFileAccessRequestBase RequestBase;
+    [min_ver("1.50")] string Name;                        // the logical file name
+    [min_ver("1.50")] string Cluster;                     // needed only if on >1 Cluster and want to disambiguate
+    [min_ver("1.50")] ESPenum DFUFileType Type;           // e.g. flat, csv, xml
+    string ECLRecordDefinition;                           // ecl text record definition
+    [min_ver("1.50")] string RequestId;                   // optional 
+    [min_ver("1.50")] int ExpirySeconds(60);              // how long the retrieved meta info is valid for, to access physical files (in dafilesrv) 
+    [min_ver("1.50")] bool ReturnTextResponse(false);     // Returns response in full not just in blob    
+
+// legacy request format only
+    [depr_ver("1.50")] ESParray<string> PartLocations;
+    [depr_ver("1.50")] EspStruct DFUFileAccessRequestBase RequestBase;
 };
 
 ESPresponse [exceptions_inline, nil_remove] DFUFileCreateResponse
 {
     string FileId;
-    string Warning;
+    [depr_ver("1.50")] string Warning;
     EspStruct DFUFileAccessInfo AccessInfo;
 };
 
 ESPrequest [nil_remove] DFUFilePublishRequest
 {
     string FileId;
+    [min_ver("1.50")] bool Overwrite;
+    [min_ver("1.50")] binary FileDescriptorBlob;
+
+// if FileDescriptorBlob supplied, these are optional       
     string ECLRecordDefinition;
-    int64 RecordCount;
+    int64 RecordCount;          
     int64 FileSize;
 };
 
@@ -919,7 +955,8 @@ ESPresponse [exceptions_inline, nil_remove] DFUFilePublishResponse
 //  ===========================================================================
 ESPservice [
     auth_feature("DEFERRED"),
-    version("1.40"),
+    version("1.50"),
+    default_client_version("1.50"),
     noforms,
     exceptions_inline("./smc_xslt/exceptions.xslt")] WsDfu
 {
