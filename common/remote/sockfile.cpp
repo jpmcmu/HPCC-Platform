@@ -7397,7 +7397,7 @@ public:
         run(_connectMethod, acceptSock.getClear(), secureSock.getClear(), rowServiceSock.getClear());
     }
 
-    void run(DAFSConnectCfg _connectMethod, ISocket *_acceptSock, ISocket *_secureSock, ISocket *_rowServiceSock)
+    virtual void run(DAFSConnectCfg _connectMethod, ISocket *_acceptSock, ISocket *_secureSock, ISocket *_rowServiceSock) override
     {
         acceptsock.setown(_acceptSock);
         securesock.setown(_secureSock);

@@ -455,3 +455,200 @@ StringBuffer &encodeDFUFileMeta(StringBuffer &metaInfoBlob, IPropertyTree *metaI
 
 
 } // namespace wsdfuaccess
+
+
+#ifdef _USE_CPPUNIT
+#include "unittests.hpp"
+#include "sockfile.hpp"
+#include "rmtfile.hpp"
+#include "dafscommon.hpp"
+#include "portlist.h"
+
+using namespace wsdfuaccess;
+class DFUAccessTests : public CppUnit::TestFixture
+{
+    CPPUNIT_TEST_SUITE(DFUAccessTests);
+        CPPUNIT_TEST(testStartServer);
+        CPPUNIT_TEST(testDaFsStreaming);
+        CPPUNIT_TEST(testFinish);
+   CPPUNIT_TEST_SUITE_END();
+
+   unsigned serverPort = DAFILESRV_PORT+1; // do not use standard port, which if in a URL will be converted to local path if IP is local
+   StringBuffer basePath;
+   Owned<CSimpleInterface> serverThread;
+   Owned<IFileDescriptor> fileDesc;
+protected:
+    void testStartServer()
+    {
+        Owned<ISocket> socket;
+
+        unsigned endPort = MP_END_PORT;
+        while (1)
+        {
+            try
+            {
+                socket.setown(ISocket::create(serverPort));
+                break;
+            }
+            catch (IJSOCK_Exception *e)
+            {
+                if (e->errorCode() != JSOCKERR_port_in_use)
+                {
+                    StringBuffer eStr;
+                    e->errorMessage(eStr);
+                    e->Release();
+                    CPPUNIT_ASSERT_MESSAGE(eStr.str(), 0);
+                }
+                else if (serverPort == endPort)
+                {
+                    e->Release();
+                    CPPUNIT_ASSERT_MESSAGE("Could not find a free port to use for remote file server", 0);
+                }
+            }
+            ++serverPort;
+        }
+
+        basePath.append("//");
+        SocketEndpoint ep(serverPort);
+        ep.getUrlStr(basePath);
+
+        char cpath[_MAX_DIR];
+        if (!GetCurrentDirectory(_MAX_DIR, cpath))
+            CPPUNIT_ASSERT_MESSAGE("Current directory path too big", 0);
+        else
+            basePath.append(cpath);
+        addPathSepChar(basePath);
+
+        PROGLOG("basePath = %s", basePath.str());
+
+        class CServerThread : public CSimpleInterface, implements IThreaded
+        {
+            CThreaded threaded;
+            Owned<IRemoteFileServer> server;
+            Linked<ISocket> socket;
+        public:
+            CServerThread(IRemoteFileServer *_server, ISocket *_socket) : server(_server), socket(_socket), threaded("CServerThread")
+            {
+                threaded.init(this);
+            }
+            ~CServerThread()
+            {
+                threaded.join();
+            }
+        // IThreaded
+            virtual void threadmain() override
+            {
+                DAFSConnectCfg sslCfg = SSLNone;
+                server->run(sslCfg, socket, nullptr, nullptr);
+            }
+        };
+        enableDafsAuthentication(false);
+        Owned<IRemoteFileServer> server = createRemoteFileServer();
+        serverThread.setown(new CServerThread(QUERYINTERFACE(server.getClear(), IRemoteFileServer), socket.getClear()));
+    }
+    void testDaFsStreaming()
+    {
+        configureRemoteCreateFileDescriptorCB(queryFileDescriptorFactory());
+
+        const char *thorInstance = "mythor";
+        const char *groupName = thorInstance;
+        const char *fname = ".::dfuaccess::testfname1";
+        IUserDescriptor *userDesc = nullptr;
+        const char *keyPairName = nullptr;
+        unsigned port = 0;
+        bool secure = false;
+        unsigned expiryTime = 60;
+        unsigned maxFileAccessExpirySeconds = 300;
+
+        unsigned numRecsInTest = 100;
+
+        const char *eclRecDef = "{ string5 f1; string10 f2; };";
+        size32_t fixedRecSize = 15;
+
+        fileDesc.setown(createFileDescriptor());
+
+        GroupType groupType;
+        StringBuffer basedir;
+
+        SocketEndpointArray eps;
+        SocketEndpoint ep(".", serverPort);
+        eps.append(ep);
+        Owned<IGroup> group = createIGroup(eps);
+
+        fileDesc.setown(createFileDescriptor(fname, "thor", "mythor", group));
+        fileDesc->queryProperties().setProp("ECL", eclRecDef);
+
+        Owned<IPropertyTree> metaInfo = createDFUFileMetaInfo(fname, fileDesc, "cppunit-test1", "WRITE", 30,
+                                                              userDesc, keyPairName, port, secure, maxFileAccessExpirySeconds);
+        StringBuffer metaInfoBlob;
+        encodeDFUFileMeta(metaInfoBlob, metaInfo, nullptr);
+
+        Owned<IDFUFileAccess> newFile = createDFUFileAccess(metaInfoBlob);
+        CRC32 writeCrc32;
+        // write
+        unsigned n = newFile->queryNumParts();
+        for (unsigned p=0; p<n; p++)
+        {
+            Owned<IDFUFilePartWriter> writer = newFile->createFilePartWriter(p);
+            writer->start();
+
+            for (unsigned r=0; r<numRecsInTest; r++)
+            {
+                VStringBuffer rowData("%5u%10u", r, r);
+                writer->write(fixedRecSize, rowData.str());
+                writeCrc32.tally(fixedRecSize, rowData.str());
+            }
+        }
+        newFile->setFilePropertyInt("@recordCount", numRecsInTest);
+
+        // publish would normally happen here, but this unittest is self-contained (no esp etc.)
+
+
+        CRC32 readCrc32;
+        // read back
+        for (unsigned p=0; p<n; p++)
+        {
+            Owned<IDFUFilePartReader> reader = newFile->createFilePartReader(p);
+            reader->start();
+
+            for (unsigned r=0; r<numRecsInTest; r++)
+            {
+                size32_t sz;
+                const void *row = reader->nextRow(sz);
+                assertex(row);
+                readCrc32.tally(sz, row);
+            }
+        }
+        if (writeCrc32.get() != readCrc32.get())
+        {
+            VStringBuffer errMsg("DFU write/read test: crc's don't match. Write crc=%x, read crc=%x", writeCrc32.get(), readCrc32.get());
+            CPPUNIT_ASSERT_MESSAGE(errMsg.str(), 0);
+        }
+    }
+    void testFinish()
+    {
+        // clearup
+        if (fileDesc)
+        {
+            RemoteFilename rfn;
+            fileDesc->getFilename(0, 0, rfn);
+            StringBuffer path;
+            rfn.getPath(path);
+            Owned<IFile> iFile = createIFile(path);
+            iFile->remove();
+        }
+
+        SocketEndpoint ep(serverPort);
+        Owned<ISocket> sock = ISocket::connect_timeout(ep, 60 * 1000);
+        CPPUNIT_ASSERT(RFEnoerror == stopRemoteServer(sock));
+
+        serverThread.clear();
+    }
+};
+
+CPPUNIT_TEST_SUITE_REGISTRATION( DFUAccessTests );
+CPPUNIT_TEST_SUITE_NAMED_REGISTRATION( DFUAccessTests, "DFUAccessTests" );
+
+
+#endif // _USE_CPPUNIT
+
