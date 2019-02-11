@@ -86,10 +86,12 @@ interface IRemoteRowServer : extends IInterface
 
 interface IKeyManager;
 interface IDelayedFile;
+interface IDaFsConnection;
 
 extern REMOTE_API IFile * createRemoteFile(SocketEndpoint &ep,const char * _filename);
 extern REMOTE_API unsigned getRemoteVersion(ISocket * _socket, StringBuffer &ver);
-extern REMOTE_API unsigned getCachedRemoteVersion(const SocketEndpoint &ep);
+extern REMOTE_API unsigned getCachedRemoteVersion(IDaFsConnection &daFsConnection);
+extern REMOTE_API unsigned getCachedRemoteVersion(const SocketEndpoint &ep, bool secure);
 extern REMOTE_API unsigned stopRemoteServer(ISocket * _socket);
 extern REMOTE_API const char *remoteServerVersionString();
 extern REMOTE_API IRemoteFileServer * createRemoteFileServer(unsigned maxThreads=DEFAULT_THREADLIMIT, unsigned maxThreadsDelayMs=DEFAULT_THREADLIMITDELAYMS, unsigned maxAsyncCopy=DEFAULT_ASYNCCOPYMAX, IPropertyTree *keyPairInfo=nullptr);
@@ -128,9 +130,17 @@ extern REMOTE_API void configureRemoteCreateFileDescriptorCB(FileDescriptorFacto
 
 
 // client only
-
-// client only
 extern FileDescriptorFactoryType queryRemoteCreateFileDescriptorCB();
+interface IDaFsConnection : extends IInterface
+{
+    virtual void close(int handle) = 0;
+    virtual void send(MemoryBuffer &sendMb, MemoryBuffer &reply) = 0;
+    virtual unsigned getVersion(StringBuffer &ver) = 0;
+    virtual const SocketEndpoint &queryEp() const = 0;
+};
+
+IDaFsConnection *createDaFsConnection(const SocketEndpoint &ep, DAFSConnectCfg connectMethod, const char *tracing);
+
 extern void clientSetDaliServixSocketCaching(bool set);
 extern void clientDisconnectRemoteFile(IFile *file);
 extern void clientDisconnectRemoteIoOnExit(IFileIO *fileio,bool set);

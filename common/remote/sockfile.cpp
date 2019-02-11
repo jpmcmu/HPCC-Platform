@@ -31,7 +31,6 @@
 #include "jqueue.tpp"
 
 #include "securesocket.hpp"
-#include "sockfile.hpp"
 #include "portlist.h"
 #include "jsocket.hpp"
 #include "jencrypt.hpp"
@@ -57,6 +56,10 @@
 #include "digisign.hpp"
 
 #include "dafdesc.hpp"
+
+#include "dafscommon.hpp"
+#include "sockfile.hpp"
+
 
 using namespace cryptohelper;
 
@@ -303,71 +306,6 @@ static byte traceFlags=0x20;
 #define TF_TRACE_TREE_COPY (traceFlags&0x10)
 #define TF_TRACE_CLIENT_STATS (traceFlags&0x20)
 
-
-static const unsigned RFEnoerror = 0;
-
-enum
-{
-    RFCopenIO,                                      // 0
-    RFCcloseIO,
-    RFCread,
-    RFCwrite,
-    RFCsize,
-    RFCexists,
-    RFCremove,
-    RFCrename,
-    RFCgetver,
-    RFCisfile,
-    RFCisdirectory,                                 // 10
-    RFCisreadonly,
-    RFCsetreadonly,
-    RFCgettime,
-    RFCsettime,
-    RFCcreatedir,
-    RFCgetdir,
-    RFCstop,
-    RFCexec,                                        // legacy cmd removed
-    RFCdummy1,                                      // legacy placeholder
-    RFCredeploy,                                    // 20
-    RFCgetcrc,
-    RFCmove,
-// 1.5 features below
-    RFCsetsize,
-    RFCextractblobelements,
-    RFCcopy,
-    RFCappend,
-    RFCmonitordir,
-    RFCsettrace,
-    RFCgetinfo,
-    RFCfirewall,    // not used currently          // 30
-    RFCunlock,
-    RFCunlockreply,
-    RFCinvalid,
-    RFCcopysection,
-// 1.7e
-    RFCtreecopy,
-// 1.7e - 1
-    RFCtreecopytmp,
-// 1.8
-    RFCsetthrottle, // legacy version
-// 1.9
-    RFCsetthrottle2,
-    RFCsetfileperms,
-// 2.0
-    RFCreadfilteredindex,    // No longer used     // 40
-    RFCreadfilteredindexcount,
-    RFCreadfilteredindexblob,
-// 2.2
-    RFCStreamRead,                                 // 43
-// 2.4
-    RFCStreamReadTestSocket,                       // 44
-// 2.5
-    RFCStreamGeneral,                              // 45
-    RFCStreamReadJSON = '{',
-    RFCmaxnormal,
-    RFCmax,
-    RFCunknown = 255 // 0 would have been more sensible, but can't break backward compatibility
-};
 
 // used by testsocket only
 RemoteFileCommandType queryRemoteStreamCmd()
@@ -668,13 +606,6 @@ void setDafsEndpointPort(SocketEndpoint &ep)
     }
 }
 
-
-inline MemoryBuffer & initSendBuffer(MemoryBuffer & buff)
-{
-    buff.setEndian(__BIG_ENDIAN);       // transfer as big endian...
-    buff.append((unsigned)0);           // reserve space for length prefix
-    return buff;
-}
 
 inline void sendBuffer(ISocket * socket, MemoryBuffer & src, bool testSocketFlag=false)
 {
@@ -1090,7 +1021,7 @@ static void cleanupSocket(ISocket *sock)
 
 //---------------------------------------------------------------------------
 
-class CRemoteBase: public CInterface
+class CRemoteBase: public CSimpleInterfaceOf<IDaFsConnection>
 {
     Owned<ISocket>          socket;
     static  SocketEndpoint  lastfailep;
@@ -1511,6 +1442,12 @@ public:
         connectMethod = securitySettings.connectMethod;
     }
 
+    CRemoteBase(const SocketEndpoint &_ep, DAFSConnectCfg _connectMethod, const char * _filename)
+        : filename(_filename)
+    {
+        ep = _ep;
+        connectMethod = _connectMethod;
+    }
     void disconnect()
     {
         CriticalBlock block(crit);
@@ -1532,11 +1469,82 @@ public:
     {
         return filename;
     }
+// IDaFsConnection impl.
+    virtual void close(int handle) override
+    {
+        if (handle)
+        {
+            try
+            {
+                MemoryBuffer sendBuffer;
+                initSendBuffer(sendBuffer);
+                sendBuffer.append((RemoteFileCommandType)RFCcloseIO).append(handle);
+                sendRemoteCommand(sendBuffer,false);
+            }
+            catch (IDAFS_Exception *e)
+            {
+                if ((e->errorCode()!=RFSERR_InvalidFileIOHandle)&&(e->errorCode()!=RFSERR_NullFileIOHandle))
+                    throw;
+                e->Release();
+            }
+        }
+    }
+    virtual void send(MemoryBuffer &sendMb, MemoryBuffer &reply) override
+    {
+        sendRemoteCommand(sendMb, reply);
+    }
+    virtual unsigned getVersion(StringBuffer &ver) override
+    {
+        unsigned ret;
+        MemoryBuffer sendBuffer;
+        initSendBuffer(sendBuffer);
+        sendBuffer.append((RemoteFileCommandType)RFCgetver);
+        sendBuffer.append((unsigned)RFCgetver);
+        MemoryBuffer replyBuffer;
+        try
+        {
+            sendRemoteCommand(sendBuffer, replyBuffer, true, false, false);
+        }
+        catch (IException *e)
+        {
+            EXCLOG(e);
+            ::Release(e);
+            return 0;
+        }
+        unsigned errCode;
+        replyBuffer.read(errCode);
+        if (errCode==RFSERR_InvalidCommand)
+        {
+            ver.append("DS V1.0");
+            return 10;
+        }
+        else if (errCode==0)
+            ret = 11;
+        else if (errCode<0x10000)
+            return 0;
+        else
+            ret = errCode-0x10000;
 
+        StringAttr vers;
+        replyBuffer.read(vers);
+        ver.append(vers);
+        return ret;
+    }
+    virtual const SocketEndpoint &queryEp() const override
+    {
+        return ep;
+    }
 };
 
 SocketEndpoint  CRemoteBase::lastfailep;
 unsigned CRemoteBase::lastfailtime;
+
+
+
+IDaFsConnection *createDaFsConnection(const SocketEndpoint &ep, DAFSConnectCfg connectMethod, const char *tracing)
+{
+    return new CRemoteBase(ep, connectMethod, tracing);
+}
 
 
 //---------------------------------------------------------------------------
@@ -1827,8 +1835,10 @@ void CEndpointCS::beforeDispose()
 
 class CRemoteFilteredFileIOBase : public CRemoteBase, implements IRemoteFileIO
 {
+    typedef CRemoteBase PARENT;
 public:
-    IMPLEMENT_IINTERFACE;
+    IMPLEMENT_IINTERFACE_O_USING(CRemoteBase);
+
     // Really a stream, but life (maybe) easier elsewhere if looks like a file
     // Sometime should refactor to be based on ISerialStream instead - or maybe IRowStream.
     CRemoteFilteredFileIOBase(SocketEndpoint &ep, const char *filename, IOutputMetaData *actual, IOutputMetaData *projected, const RowFilter &fieldFilters, unsigned __int64 chooseN)
@@ -1911,23 +1921,8 @@ public:
     virtual void flush() override { throwUnexpected(); }
     virtual void close() override
     {
-        if (handle)
-        {
-            try
-            {
-                MemoryBuffer sendBuffer;
-                initSendBuffer(sendBuffer);
-                sendBuffer.append((RemoteFileCommandType)RFCcloseIO).append(handle);
-                sendRemoteCommand(sendBuffer,false);
-            }
-            catch (IDAFS_Exception *e)
-            {
-                if ((e->errorCode()!=RFSERR_InvalidFileIOHandle)&&(e->errorCode()!=RFSERR_NullFileIOHandle))
-                    throw;
-                e->Release();
-            }
-            handle = 0;
-        }
+        PARENT::close(handle);
+        handle = 0;
     }
     virtual unsigned __int64 getStatistic(StatisticKind kind) override
     {
@@ -2232,7 +2227,8 @@ class CRemoteFile : public CRemoteBase, implements IFile
     unsigned flags;
     bool isShareSet;
 public:
-    IMPLEMENT_IINTERFACE
+    IMPLEMENT_IINTERFACE_O_USING(CRemoteBase);
+
     CRemoteFile(const SocketEndpoint &_ep, const char * _filename)
         : CRemoteBase(_ep, _filename)
     {
@@ -3389,42 +3385,9 @@ ISocket *connectDafs(SocketEndpoint &ep, unsigned timeoutms)
     throw createDafsException(DAFSERR_connection_failed, "Failed to establish connection with DaFileSrv");
 }
 
-unsigned getRemoteVersion(CRemoteFileIO &remoteFileIO, StringBuffer &ver)
+unsigned getRemoteVersion(IDaFsConnection &daFsConnection, StringBuffer &ver)
 {
-    unsigned ret;
-    MemoryBuffer sendBuffer;
-    initSendBuffer(sendBuffer);
-    sendBuffer.append((RemoteFileCommandType)RFCgetver);
-    sendBuffer.append((unsigned)RFCgetver);
-    MemoryBuffer replyBuffer;
-    try
-    {
-        remoteFileIO.sendRemoteCommand(sendBuffer, replyBuffer, true, false, false);
-    }
-    catch (IException *e)
-    {
-        EXCLOG(e);
-        ::Release(e);
-        return 0;
-    }
-    unsigned errCode;
-    replyBuffer.read(errCode);
-    if (errCode==RFSERR_InvalidCommand)
-    {
-        ver.append("DS V1.0");
-        return 10;
-    }
-    else if (errCode==0)
-        ret = 11;
-    else if (errCode<0x10000)
-        return 0;
-    else
-        ret = errCode-0x10000;
-
-    StringAttr vers;
-    replyBuffer.read(vers);
-    ver.append(vers);
-    return ret;
+    return daFsConnection.getVersion(ver);
 }
 
 unsigned getRemoteVersion(ISocket *origSock, StringBuffer &ver)
@@ -3471,7 +3434,7 @@ unsigned getRemoteVersion(ISocket *origSock, StringBuffer &ver)
     return ret;
 }
 
-unsigned getCachedRemoteVersion(const SocketEndpoint &_ep)
+unsigned getCachedRemoteVersion(IDaFsConnection &daFsConnection)
 {
     /* JCSMORE - add a SocketEndpoint->version cache
      * Idea being, that clients will want to determine version and differentiate what they send
@@ -3483,11 +3446,21 @@ unsigned getCachedRemoteVersion(const SocketEndpoint &_ep)
 
     // JCSMORE TBD (properly!)
 
-    SocketEndpoint ep = _ep;
-    setDafsEndpointPort(ep);
-    Owned<ISocket> socket = connectDafs(ep, 10000);
-    StringBuffer ver; // no needed, version encoded in return code
-    return getRemoteVersion(socket, ver);
+    // 1st check ep in cache using:
+    //   daFsConnect.queryEp()
+    // else
+
+    StringBuffer ver;
+    return daFsConnection.getVersion(ver);
+}
+
+unsigned getCachedRemoteVersion(const SocketEndpoint &ep, bool secure)
+{
+    // 1st check ep in cache
+    // else
+    DAFSConnectCfg connMethod = secure ? SSLOnly : SSLNone;
+    Owned<IDaFsConnection> daFsConnection = createDaFsConnection(ep, connMethod, "getversion");
+    return getCachedRemoteVersion(*daFsConnection);
 }
 
 
@@ -4078,10 +4051,12 @@ class CRemoteRequest : public CSimpleInterfaceOf<IInterface>
                 compressMb.append(responseMb);
             }
 
-            DelayedMarker<size32_t> dataLenMarker(compressor ? compressMb : responseMb); // data length
+            DelayedMarker<size32_t> dataLenMarker(compressor ? compressMb : responseMb); // uncompressed data size
 
             if (compressor)
             {
+                size32_t rowDataSz = 0;
+                compressMb.append(rowDataSz); // place holder for compressed data size
                 size32_t initialSz = replyLimit >= 0x10000 ? 0x10000 : replyLimit;
                 compressor->open(compressMb, initialSz);
             }
@@ -4172,6 +4147,9 @@ class CRemoteRequest : public CSimpleInterfaceOf<IInterface>
                 const void *data = responseMb.bytes()+dataStartPos;
                 assertex(compressor->write(data, sz) == sz);
                 compressor->close();
+                size32_t compressDataStartPos = dataLenMarker.queryPosition()+sizeof(size32_t);
+                size32_t compressedDataSz = compressMb.length()-compressDataStartPos;
+                compressMb.writeEndianDirect(compressDataStartPos, sizeof(compressedDataSz), &compressedDataSz);
                 // now ready to swap compressed output into responseMb
                 responseMb.swapWith(compressMb);
             }
@@ -4263,7 +4241,7 @@ class CRemoteRequest : public CSimpleInterfaceOf<IInterface>
         const void *rowData;
         if (expander)
         {
-            rowDataSz = expander->init(rowDataMb.readDirect(rowDataSz));
+            rowDataSz = expander->init(rowDataMb.readDirect(rowDataSz), rowDataSz);
             expandMb.clear().reserve(rowDataSz);
             expander->expand(expandMb.bufferBase());
             rowData = expandMb.bufferBase();
@@ -4865,6 +4843,8 @@ class CRemoteDiskWriteActivity : public CRemoteWriteBaseActivity
         if (opened)
             return;
 
+        if (!recursiveCreateDirectoryForFile(fileName))
+            throw createDafsExceptionV(DAFSERR_cmdstream_openfailure, "Failed to create dirtory for file: '%s'", fileName.get());
         OwnedIFile iFile = createIFile(fileName);
         assertex(iFile);
         if (compressionFormat)
@@ -4873,7 +4853,7 @@ class CRemoteDiskWriteActivity : public CRemoteWriteBaseActivity
         {
             iFileIO.setown(iFile->open(IFOcreate));
             if (!iFileIO)
-                throw createDafsExceptionV(DAFSERR_cmdstream_protocol_failure, "Failed to open: '%s' for write", fileName.get());
+                throw createDafsExceptionV(DAFSERR_cmdstream_openfailure, "Failed to open: '%s' for write", fileName.get());
         }
         iFileIOStream.setown(createIOStream(iFileIO));
         opened = true;

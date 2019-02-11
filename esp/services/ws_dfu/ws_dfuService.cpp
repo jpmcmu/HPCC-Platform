@@ -64,6 +64,7 @@
 
 #include "ws_dfuService.hpp"
 
+using namespace wsdfuaccess;
 using namespace cryptohelper;
 
 
@@ -5998,114 +5999,6 @@ SecAccessFlags translateToSecAccessFlags(CSecAccessType from)
         default:
             return SecAccess_None;
     }
-}
-
-/*
- * createDFUFileAccess() and encodeDFUFileMeta() will normally be called by the DFU service
- * via a DFS file request. So that the meta info blob can be returned to the client of the service.
- * However, for testing purposes it's also useful to create these blobs elsewhere directly from IFileDescriptor's
- */
-static IPropertyTree *createDFUFileMetaInfo(const char *fileName, IFileDescriptor *fileDesc, const char *requestId, const char *accessType, unsigned expirySecs,
-                                            IUserDescriptor *userDesc, const char *keyPairName, unsigned port, bool secure, unsigned maxFileAccessExpirySeconds)
-{
-    /*
-     * version
-     * fileName
-     * requestId [optional]
-     * accessType [const "READ" for this method]
-     * user
-     * port (int)      // port # of dafilesrv srvice to connect to
-     * secure (bool)   // if true = SSL connection
-     * keyPairName      // name of key pair to use
-     * expiryTime      // (seconds) timeout for validity of this request
-     * jsonTypeInfo     // JSON representation of the file's record definition
-     */
-    Owned<IPropertyTree> metaInfo = createPTree();
-
-    metaInfo->setProp("logicalFilename", fileName);
-    if (!isEmptyString(requestId))
-        metaInfo->setProp("requestId", requestId);
-    metaInfo->setProp("accessType", accessType);
-    StringBuffer userStr;
-    if (userDesc)
-        metaInfo->setProp("user", userDesc->getUserName(userStr).str());
-
-    // key, port, secure
-    metaInfo->setPropInt("port", port);
-    metaInfo->setPropBool("secure", secure);
-    if (!isEmptyString(keyPairName))
-        metaInfo->setProp("keyPairName", keyPairName);
-
-    // expiry time
-    if (expirySecs > maxFileAccessExpirySeconds)
-        expirySecs = maxFileAccessExpirySeconds;
-    time_t now;
-    time(&now);
-    CDateTime expiryDt;
-    expiryDt.set(now + expirySecs);
-    StringBuffer expiryTime;
-    expiryDt.getString(expiryTime);
-    metaInfo->setProp("expiryTime", expiryTime);
-
-    // layout
-    MemoryBuffer binLayout;
-    if (getDaliLayoutInfo(binLayout, fileDesc->queryProperties()))
-        metaInfo->setPropBin("binLayout", binLayout.length(), binLayout.toByteArray());
-
-    // file meta info
-    INode *node1 = fileDesc->queryNode(0);
-    SocketEndpoint ep = node1->endpoint();
-    unsigned dafilesrvVersion = getCachedRemoteVersion(node1->endpoint());
-
-    if (dafilesrvVersion < DAFILESRV_STREAMGENERAL_MINVERSION)
-    {
-        metaInfo->setPropInt("version", 1); // legacy format
-        extractFilePartInfo(*metaInfo, *fileDesc);
-    }
-    else
-    {
-        metaInfo->setPropInt("version", DAFILESRV_METAINFOVERSION);
-        IPropertyTree *fileInfoTree = metaInfo->setPropTree("FileInfo");
-        fileDesc->serializeTree(*fileInfoTree);
-    }
-    return metaInfo.getClear();
-}
-
-static StringBuffer &encodeDFUFileMeta(StringBuffer &metaInfoBlob, IPropertyTree *metaInfo, IConstEnvironment *environment)
-{
-    MemoryBuffer metaInfoMb;
-
-    /* NB: If file access security is disabled in the environment, or on a per cluster basis
-     * keyPairName will be blank. In that case the meta data is returned in plain format.
-     * NB2: Dafilesrv's would also require file access security to be disabled in that case,
-     * otherwise they will be denied access.
-     * Should be part of the same configuration setup.
-     */
-#ifdef _USE_OPENSSL
-    if (metaInfo->hasProp("keyPairName") && environment) // without it, meta data is not encrypted
-    {
-        MemoryBuffer metaInfoBlob;
-        metaInfo->serialize(metaInfoBlob);
-
-        const char *keyPairName = metaInfo->queryProp("keyPairName");
-        const char *privateKeyFName = environment->getPrivateKeyPath(keyPairName);
-        Owned<CLoadedKey> privateKey = loadPrivateKeyFromFile(privateKeyFName, nullptr);
-        StringBuffer metaInfoSignature;
-        digiSign(metaInfoSignature, metaInfoBlob.length(), metaInfoBlob.bytes(), *privateKey);
-
-        Owned<IPropertyTree> metaInfoEnvelope = createPTree();
-        metaInfoEnvelope->setProp("signature", metaInfoSignature);
-        metaInfoEnvelope->setPropBin("metaInfoBlob", metaInfoBlob.length(), metaInfoBlob.bytes());
-        metaInfoEnvelope->serialize(metaInfoMb.clear());
-    }
-    else
-#endif
-        metaInfo->serialize(metaInfoMb);
-
-    MemoryBuffer compressedMetaInfoMb;
-    fastLZCompressToBuffer(compressedMetaInfoMb, metaInfoMb.length(), metaInfoMb.bytes());
-    JBASE64_Encode(compressedMetaInfoMb.bytes(), compressedMetaInfoMb.length(), metaInfoBlob, false);
-    return metaInfoBlob;
 }
 
 bool CWsDfuEx::onDFUFileAccess(IEspContext &context, IEspDFUFileAccessRequest &req, IEspDFUFileAccessResponse &resp)

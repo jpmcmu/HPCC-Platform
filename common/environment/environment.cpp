@@ -2362,3 +2362,54 @@ extern ENVIRONMENT_API unsigned long readSizeSetting(const char * sizeStr, const
     }
     return size;
 }
+
+unsigned getAccessibleServiceURLList(const char *serviceType, std::vector<std::string> &list)
+{
+    unsigned added = 0;
+    Owned<IEnvironmentFactory> factory = getEnvironmentFactory(true);
+    Owned<IConstEnvironment> daliEnv = factory->openEnvironment();
+    Owned<IPropertyTree> env = &daliEnv->getPTree();
+    if (env.get())
+    {
+        StringBuffer fileMetaServiceUrl;
+        StringBuffer espInstanceComputerName;
+        StringBuffer bindingProtocol;
+        StringBuffer xpath;
+        StringBuffer instanceAddress;
+        StringBuffer espServiceType;
+
+        Owned<IPropertyTreeIterator> espProcessIter = env->getElements("Software/EspProcess");
+        ForEach(*espProcessIter)
+        {
+            Owned<IPropertyTreeIterator> espBindingIter = espProcessIter->query().getElements("EspBinding");
+            ForEach(*espBindingIter)
+            {
+                xpath.setf("Software/EspService[@name=\"%s\"]/Properties/@type",  espBindingIter->query().queryProp("@service"));
+
+                if (strisame(env->queryProp(xpath), serviceType))
+                {
+                    if (espBindingIter->query().getProp("@protocol", bindingProtocol.clear()))
+                    {
+                        Owned<IPropertyTreeIterator> espInstanceIter = espProcessIter->query().getElements("Instance");
+                        ForEach(*espInstanceIter)
+                        {
+                            if (espInstanceIter->query().getProp("@computer", espInstanceComputerName.clear()))
+                            {
+                                xpath.setf("Hardware/Computer[@name=\"%s\"]/@netAddress", espInstanceComputerName.str());
+                                if (env->getProp(xpath.str(), instanceAddress.clear()))
+                                {
+                                    fileMetaServiceUrl.setf("%s://%s:%d", bindingProtocol.str(), instanceAddress.str(), espBindingIter->query().getPropInt("@port",8010));
+                                    list.push_back(fileMetaServiceUrl.str());
+                                    ++added;
+                                }
+                            }
+                        }
+                    }
+                }
+            }//ESPBinding
+        }//ESPProcess
+    }
+    return added;
+}
+
+

@@ -261,6 +261,7 @@ public:
         pos = mb.length();
         mb.appendBytes(0, sizeof(CLASS));
     }
+    inline size32_t queryPosition() const { return pos; }
 };
 
 // Utility class, to back patch a size into current position

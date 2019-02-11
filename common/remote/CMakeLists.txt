@@ -32,6 +32,7 @@ set (    SRCS
          rmtspawn.cpp 
          rmtssh.cpp 
          rmtsmtp.cpp 
+         dafsstream.cpp
          sockfile.cpp
          
          remoteerr.hpp
@@ -57,11 +58,16 @@ include_directories (
          ${HPCC_SOURCE_DIR}/system/jlib 
          ${HPCC_SOURCE_DIR}/system/jhtree
          ${HPCC_SOURCE_DIR}/rtl/eclrtl
+         ${HPCC_SOURCE_DIR}/system/security/shared
          ${HPCC_SOURCE_DIR}/system/security/securesocket
          ${HPCC_SOURCE_DIR}/system/security/cryptohelper
          ${HPCC_SOURCE_DIR}/testing/unittests
          ${HPCC_SOURCE_DIR}/rtl/include
+         ${HPCC_SOURCE_DIR}/rtl/eclrtl
+         ${HPCC_SOURCE_DIR}/ecl/hql
+         ${HPCC_SOURCE_DIR}/common/deftype
          ${HPCC_SOURCE_DIR}/dali/base
+         ${CMAKE_BINARY_DIR}
     )
 
 ADD_DEFINITIONS( -D_USRDLL -DREMOTE_EXPORTS )
@@ -73,6 +79,7 @@ target_link_libraries ( remote
     eclrtl
     jlib
     jhtree 
+    hql   
     mp
     ${URIPARSER_LIBRARIES}
     ${CPPUNIT_LIBRARIES}

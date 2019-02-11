@@ -39,6 +39,7 @@ static const char* defaultRowSericeConfiguration = "RowSvc";
 
 
 #include "remoteerr.hpp"
+#include "dafscommon.hpp"
 #include "sockfile.hpp"
 
 void usage()

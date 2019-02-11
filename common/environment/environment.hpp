@@ -216,6 +216,7 @@ extern "C" ENVIRONMENT_API void closeEnvironment();
 
 extern ENVIRONMENT_API unsigned long readSizeSetting(const char * sizeStr, const unsigned long defaultSize);
 
+extern ENVIRONMENT_API unsigned getAccessibleServiceURLList(const char *serviceType, std::vector<std::string> &list);
 
 #endif // _ENVIRONMENT_INCL
 //end
