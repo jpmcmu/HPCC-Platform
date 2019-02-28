@@ -6246,11 +6246,6 @@ bool CWsDfuEx::onDFUFileCreate(IEspContext &context, IEspDFUFileCreateRequest &r
             group.setown(getDFUFileIGroup(clusterName, clusterType, clusterTypeEx, req.getPartLocations(), groupName));
 
             tempFileName.append(DFUFileCreate_FileNamePostfix);
-
-            //create FileId
-            StringBuffer fileID;
-            fileID.set(groupName.str()).append(DFUFileIdSeparator).append(clusterName).append(DFUFileIdSeparator).append(tempFileName.str());
-            resp.setFileId(fileID.str());
         }
         else
         {
@@ -6264,6 +6259,11 @@ bool CWsDfuEx::onDFUFileCreate(IEspContext &context, IEspDFUFileCreateRequest &r
             tempFileName.append(".").append(dfuCreateUniqId++); // avoid potential clash if >1 creating file. One will succeed at publish time.
             tempFileName.append(DFUFileCreate_FileNamePostfix);
         }
+
+        //create FileId
+        StringBuffer fileID;
+        fileID.set(groupName.str()).append(DFUFileIdSeparator).append(clusterName).append(DFUFileIdSeparator).append(tempFileName.str());
+        resp.setFileId(fileID.str());
 
         if (requestId.isEmpty())
             requestId.appendf("Create %s on %s", tempFileName.str(), clusterName);
