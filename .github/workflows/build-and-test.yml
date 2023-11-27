@@ -20,7 +20,7 @@ on:
 
 jobs:
   preamble:
-    name: Publish Release
+    name: Preamble
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -69,6 +69,8 @@ jobs:
           echo "${{ toJSON(steps.vars.outputs) }})"
 
   build-and-test:
+    name: Build Platform & HPCC4j Tests
+    needs: preamble
     runs-on: ubuntu-20.04
     steps:
       - name: Checkout PR
