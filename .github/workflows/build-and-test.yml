@@ -110,12 +110,10 @@ jobs:
           builder: ${{ steps.buildx.outputs.name }}
           file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
           context: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg
-          push: ${{ github.repository_owner == 'hpcc-systems' }}
-          load: ${{ github.repository_owner != 'hpcc-systems' }}
+          load: true
           build-args: |
             VCPKG_REF=${{ steps.vars.outputs.vcpkg_sha_short }}
           tags: localhost:5000/hpcc:latest
-          outputs: type=docker,dest=/tmp/hpcc_latest.tar
           # cache-from: |
           #   type=registry,ref=${{ steps.vars.outputs.docker_tag_candidate_base }}
           #   type=registry,ref=${{ steps.vars.outputs.docker_tag }}
@@ -166,9 +164,9 @@ jobs:
           kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.crds.yaml
           helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --version v1.11.0
 
-      - name: Import Image
-        run: |
-          sudo microk8s images import < /tmp/hpcc_latest.tar
+      # - name: Import Image
+      #   run: |
+      #     sudo microk8s images import < /tmp/hpcc_latest.tar
 
       - name: Install HPCC Cluster
         run: |
