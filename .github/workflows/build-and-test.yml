@@ -1,0 +1,155 @@
+name: Docker build & Regression Test
+on:
+  push:
+    branches:
+      - "HPCC-29584"
+  pull_request:
+    branches:
+      - "master"
+      - "candidate-*.x"
+      - "!candidate-8.2.*"
+      - "!candidate-8.0.*"
+      - "!candidate-7.12.*"
+      - "!candidate-7.10.*"
+      - "!candidate-7.8.*"
+      - "!candidate-7.6.*"
+      - "!candidate-7.4.*"
+      - "!candidate-7.2.*"
+      - "!candidate-7.0.*"
+      - "!candidate-6.*"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          path: ./HPCC-Platform
+
+      - name: "vcpkg Bootstrap"
+        shell: "bash"
+        run: |
+          ./HPCC-Platform/vcpkg/bootstrap-vcpkg.sh
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          driver-opts: |
+            network=host
+
+      - name: Calculate vars
+        id: vars
+        working-directory: ${{ needs.preamble.outputs.folder_platform }}/vcpkg
+        run: |
+          vcpkg_sha_short=$(git rev-parse --short=8 HEAD)
+          echo "vcpkg_sha_short=$vcpkg_sha_short" >> $GITHUB_OUTPUT
+          docker_build_label=hpccsystems/platform-build-${{ matrix.os }}
+          echo "docker_build_label=$docker_build_label" >> $GITHUB_OUTPUT
+          echo "docker_tag=$docker_build_label:$vcpkg_sha_short" >> $GITHUB_OUTPUT
+          echo "docker_tag_candidate_base=$docker_build_label:${{ needs.preamble.outputs.candidate_base_branch }}" >> $GITHUB_OUTPUT
+
+      - name: Create Build Image
+        uses: docker/build-push-action@v4
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          # file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ matrix.os }}.dockerfile
+          file: ./dockerfiles/platform-build/Dockerfile
+          context: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg
+          push: ${{ github.repository_owner == 'hpcc-systems' }}
+          load: ${{ github.repository_owner != 'hpcc-systems' }}
+          build-args: |
+            VCPKG_REF=${{ steps.vars.outputs.vcpkg_sha_short }}
+          tags: localhost:5000/hpcc:latest
+          outputs: type=docker,dest=/tmp/hpcc_latest.tar
+          # cache-from: |
+          #   type=registry,ref=${{ steps.vars.outputs.docker_tag_candidate_base }}
+          #   type=registry,ref=${{ steps.vars.outputs.docker_tag }}
+          cache-to: type=inline
+
+      - name: Install K8s
+        uses: balchua/microk8s-actions@v0.3.2
+        with:
+          channel: '1.26/stable'
+          devMode: 'true'
+          addons: '["dns", "rbac", "hostpath-storage"]'
+
+      # Note: IP Address range below is the IP address range that will be made available for load balancers
+      # on the host machine, they aren't actual load balancers so they will not be accessible externally
+      - name: Enable LoadBalancers
+        run: |
+          sudo microk8s enable metallb:10.64.140.43-10.64.140.69
+
+      - name: Create Root Certificates
+        run: |
+          echo "[req]
+          default_bits           = 2048
+          default_keyfile        = ca.key
+          distinguished_name     = dn
+          prompt                 = no
+          x509_extensions        = x509_ca
+
+          [dn]
+          C                      = US
+          ST                     = GA
+          L                      = Alparetta
+          O                      = Lexis Nexis Risk
+          OU                     = Platform Development
+          CN                     = TestCluster
+          emailAddress           = support@lexisnexisrisk.com
+
+          [x509_ca]
+          basicConstraints=CA:true,pathlen:1" > ca-req.cfg
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -sha256 -days 1825 -out ca.crt -config ca-req.cfg
+          kubectl create secret tls hpcc-signing-issuer-key-pair --cert=ca.crt --key=ca.key
+          kubectl create secret tls hpcc-local-issuer-key-pair --cert=ca.crt --key=ca.key
+          sudo keytool -import -trustcacerts -cacerts -storepass changeit -noprompt -alias hpcc-local-issuer -file ca.crt
+
+      - name: Install JetStack Cert Manager
+        run: |
+          helm repo add jetstack https://charts.jetstack.io
+          helm repo update
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.crds.yaml
+          helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --version v1.11.0
+
+      - name: Import Image
+        run: |
+          sudo microk8s images import < /tmp/hpcc_latest.tar
+
+      - name: Install HPCC Cluster
+        run: |
+          echo -e "certificates:\n  enabled: true\ndafilesrv:\n  - name: rowservice\n    disabled: false\n    application: stream\n    service:\n      servicePort: 7600\n      visibility: global" > values.yaml
+          helm repo add hpcc https://hpcc-systems.github.io/helm-chart
+          helm repo update
+          helm install myhpcc ./helm/hpcc --set global.image.version=latest -f values.yaml
+
+      - name: Wait for ECLWatch Startup
+        run: |
+          echo "Waiting for ECLWatch startup" && kubectl wait --for=condition=ready pod --timeout=180s -l app=eclwatch
+          echo "Waiting for Rowservice startup" && kubectl wait --for=condition=ready pod --timeout=180s -l server=rowservice
+          echo "Waiting for SQL2ECL startup" && kubectl wait --for=condition=ready pod --timeout=180s -l app=sql2ecl
+          echo "ECLWATCH_IP=$(kubectl get svc eclwatch -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
+          echo "ROWSERVICE_IP=$(kubectl get svc rowservice -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
+          echo "SQL_TO_ECL_IP=$(kubectl get svc sql2ecl -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
+          kubectl get pods
+          kubectl get svc
+
+      - name: Add Host File Entries
+        run: |
+          sudo -- sh -c -e "echo '${{ env.ECLWATCH_IP }} eclwatch.default' >> /etc/hosts";
+          sudo -- sh -c -e "echo '${{ env.ROWSERVICE_IP }} rowservice.default' >> /etc/hosts";
+          sudo -- sh -c -e "echo '${{ env.SQL_TO_ECL_IP }} sql2ecl.default' >> /etc/hosts";
+
+      - name: Trust Certs
+        run: |
+          openssl s_client -showcerts -connect eclwatch.default:8010 < /dev/null | openssl x509 -outform DER > cert.der
+          sudo keytool -import -keystore $JAVA_HOME/jre/lib/security/cacerts -storepass changeit -noprompt -alias eclwatch-tls -file cert.der
+          openssl s_client -showcerts -connect rowservice.default:7600 < /dev/null | openssl x509 -outform DER > cert.der
+          sudo keytool -import -keystore $JAVA_HOME/jre/lib/security/cacerts -storepass changeit -noprompt -alias dafilesrv-tls -file cert.der
+          openssl s_client -showcerts -connect sql2ecl.default:8510 < /dev/null | openssl x509 -outform DER > cert.der
+          sudo keytool -import -keystore $JAVA_HOME/jre/lib/security/cacerts -storepass changeit -noprompt -alias sqltoecl-tls -file cert.der
+
+
+
