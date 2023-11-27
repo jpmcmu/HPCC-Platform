@@ -1,4 +1,4 @@
-name: Docker build & Regression Test
+name: Docker Build & Regression Test
 on:
   push:
     branches:
