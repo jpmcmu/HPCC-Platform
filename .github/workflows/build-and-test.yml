@@ -136,12 +136,11 @@ jobs:
           sudo mv temp/* ${{ needs.preamble.outputs.folder_build }}/
           sudo rmdir temp
 
-
       - name: Create Docker Image (community)
         uses: docker/build-push-action@v4
         with:
           builder: ${{ steps.buildx.outputs.name }}
-          file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/platform-core-${{ env.os }}/Dockerfile
+          file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
           context: ${{ needs.preamble.outputs.folder_build }}
           push: true
           build-args: |
