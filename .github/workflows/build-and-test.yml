@@ -71,9 +71,9 @@ jobs:
   build-and-test:
     name: Build Platform & HPCC4j Tests
     needs: preamble
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     env:
-      os: ubuntu-20.04
+      os: ubuntu-22.04
     steps:
       - name: Checkout PR
         uses: actions/checkout@v3
