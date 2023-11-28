@@ -104,20 +104,18 @@ jobs:
           echo "docker_tag=$docker_build_label:$vcpkg_sha_short" >> $GITHUB_OUTPUT
           echo "docker_tag_candidate_base=$docker_build_label:${{ needs.preamble.outputs.candidate_base_branch }}" >> $GITHUB_OUTPUT
 
-      - name: Create Build Image
+      - name: Create Docker Image (community)
         uses: docker/build-push-action@v4
         with:
           builder: ${{ steps.buildx.outputs.name }}
-          file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
-          context: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg
-          load: true
+          file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/platform-core-${{ env.os }}/Dockerfile
+          context: ${{ needs.preamble.outputs.folder_build }}
+          push: true
           build-args: |
-            VCPKG_REF=${{ steps.vars.outputs.vcpkg_sha_short }}
+            PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
           tags: localhost:5000/hpcc:latest
-          # cache-from: |
-          #   type=registry,ref=${{ steps.vars.outputs.docker_tag_candidate_base }}
-          #   type=registry,ref=${{ steps.vars.outputs.docker_tag }}
-          cache-to: type=inline
+          cache-from: |
+            type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
 
       - name: Install K8s
         uses: balchua/microk8s-actions@v0.3.2
@@ -163,10 +161,6 @@ jobs:
           helm repo update
           kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.crds.yaml
           helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --version v1.11.0
-
-      # - name: Import Image
-      #   run: |
-      #     sudo microk8s images import < /tmp/hpcc_latest.tar
 
       - name: Install HPCC Cluster
         run: |
