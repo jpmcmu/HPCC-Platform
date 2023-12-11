@@ -210,6 +210,8 @@ jobs:
 
       - name: Wait for ECLWatch Startup
         run: |
+          sleep 30
+          kubectl get pods
           echo "Waiting for ECLWatch startup" && kubectl wait --for=condition=ready pod --timeout=180s -l app=eclwatch
           echo "Waiting for Rowservice startup" && kubectl wait --for=condition=ready pod --timeout=180s -l server=rowservice
           echo "Waiting for SQL2ECL startup" && kubectl wait --for=condition=ready pod --timeout=180s -l app=sql2ecl
