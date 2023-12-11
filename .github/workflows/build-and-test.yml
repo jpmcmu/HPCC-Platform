@@ -153,14 +153,13 @@ jobs:
           outputs: type=docker,dest=/tmp/hpcc_latest.tar
           build-args: |
             PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
-          tags: hpcc:local_latest
+          tags: localhost:5000/hpcc:latest
           cache-from: |
             type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
 
       - name: Import Image
         run: |
           sudo microk8s images import < /tmp/hpcc_latest.tar
-          rm /tmp/hpcc_latest.tar
 
       # Note: IP Address range below is the IP address range that will be made available for load balancers
       # on the host machine, they aren't actual load balancers so they will not be accessible externally
@@ -205,12 +204,11 @@ jobs:
           echo -e "certificates:\n  enabled: true\ndafilesrv:\n  - name: rowservice\n    disabled: false\n    application: stream\n    service:\n      servicePort: 7600\n      visibility: global" > values.yaml
           helm repo add hpcc https://hpcc-systems.github.io/helm-chart
           helm repo update
-          helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.version=local_latest -f values.yaml
+          helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.version=latest -f values.yaml
           sleep 10
 
       - name: Wait for ECLWatch Startup
         run: |
-          sleep 30
           kubectl get pods
           echo "Waiting for ECLWatch startup" && kubectl wait --for=condition=ready pod --timeout=180s -l app=eclwatch
           echo "Waiting for Rowservice startup" && kubectl wait --for=condition=ready pod --timeout=180s -l server=rowservice
@@ -220,6 +218,7 @@ jobs:
           echo "SQL_TO_ECL_IP=$(kubectl get svc sql2ecl -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
           kubectl get pods
           kubectl get svc
+          kubectl get deployments -o wide
 
       - name: Add Host File Entries
         run: |
