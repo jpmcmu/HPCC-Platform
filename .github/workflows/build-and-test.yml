@@ -141,25 +141,21 @@ jobs:
         with:
           channel: '1.26/stable'
           devMode: 'true'
-          addons: '["dns", "rbac", "hostpath-storage"]'
+          addons: '["dns", "rbac", "hostpath-storage", "registry"]'
 
-      # - name: Create Docker Image (community)
-      #   uses: docker/build-push-action@v4
-      #   with:
-      #     builder: ${{ steps.buildx.outputs.name }}
-      #     file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
-      #     context: ${{ needs.preamble.outputs.folder_build }}
-      #     # push: true
-      #     outputs: type=docker,dest=/tmp/hpcc_latest.tar
-      #     build-args: |
-      #       PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
-      #     tags: localhost:5000/hpcc:latest
-      #     cache-from: |
-      #       type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
-
-      # - name: Import Image
-      #   run: |
-      #     sudo microk8s images import < /tmp/hpcc_latest.tar
+      - name: Create Docker Image (community)
+        uses: docker/build-push-action@v4
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
+          context: ${{ needs.preamble.outputs.folder_build }}
+          push: true
+          outputs: type=docker,dest=/tmp/hpcc_latest.tar
+          build-args: |
+            PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
+          tags: localhost:5000/hpcc:local_latest
+          cache-from: |
+            type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
 
       # Note: IP Address range below is the IP address range that will be made available for load balancers
       # on the host machine, they aren't actual load balancers so they will not be accessible externally
@@ -204,7 +200,7 @@ jobs:
           echo -e "certificates:\n  enabled: true\ndafilesrv:\n  - name: rowservice\n    disabled: false\n    application: stream\n    service:\n      servicePort: 7600\n      visibility: global" > values.yaml
           helm repo add hpcc https://hpcc-systems.github.io/helm-chart
           helm repo update
-          helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.version=latest -f values.yaml
+          helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.version=local_latest -f values.yaml
           sleep 10
 
       - name: Wait for ECLWatch Startup
