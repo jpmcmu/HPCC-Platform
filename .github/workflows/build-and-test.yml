@@ -143,17 +143,17 @@ jobs:
           devMode: 'true'
           addons: '["dns", "rbac", "hostpath-storage", "helm"]'
 
-      - name: Create Docker Image (community)
-        uses: docker/build-push-action@v4
-        with:
-          builder: ${{ steps.buildx.outputs.name }}
-          file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
-          context: ${{ needs.preamble.outputs.folder_build }}
-          outputs: type=docker,dest=/tmp/hpcc_latest.tar
-          build-args: |
-            PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
-          cache-from: |
-            type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
+      # - name: Create Docker Image (community)
+      #   uses: docker/build-push-action@v4
+      #   with:
+      #     builder: ${{ steps.buildx.outputs.name }}
+      #     file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
+      #     context: ${{ needs.preamble.outputs.folder_build }}
+      #     outputs: type=docker,dest=/tmp/hpcc_latest.tar
+      #     build-args: |
+      #       PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
+      #     cache-from: |
+      #       type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
 
       # - name: Import Image
       #   run: |
