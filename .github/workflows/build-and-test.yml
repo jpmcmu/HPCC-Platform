@@ -158,7 +158,7 @@ jobs:
 
       - name: Import Image
         run: |
-          sudo microk8s images import < /tmp/hpcc_latest.tar
+          sudo microk8s -n hpcc_local image import /tmp/hpcc_latest.tar
           sudo microk8s ctr images ls
 
       # Note: IP Address range below is the IP address range that will be made available for load balancers
