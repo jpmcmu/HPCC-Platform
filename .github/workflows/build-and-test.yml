@@ -155,10 +155,10 @@ jobs:
           cache-from: |
             type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
 
-      - name: Import Image
-        run: |
-          sudo microk8s images import < /tmp/hpcc_latest.tar
-          sudo microk8s ctr images ls
+      # - name: Import Image
+      #   run: |
+      #     sudo microk8s images import < /tmp/hpcc_latest.tar
+      #     sudo microk8s ctr images ls
 
       # Note: IP Address range below is the IP address range that will be made available for load balancers
       # on the host machine, they aren't actual load balancers so they will not be accessible externally
