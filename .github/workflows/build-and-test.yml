@@ -194,15 +194,15 @@ jobs:
 
       - name: Install JetStack Cert Manager
         run: |
-          microk8s helm repo add jetstack https://charts.jetstack.io
-          microk8s helm repo update
+          sudo microk8s helm repo add jetstack https://charts.jetstack.io
+          sudo microk8s helm repo update
           kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.crds.yaml
-          microk8s helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --version v1.11.0
+          sudo microk8s helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --version v1.11.0
 
       - name: Install HPCC Cluster
         run: |
           echo -e "certificates:\n  enabled: true\ndafilesrv:\n  - name: rowservice\n    disabled: false\n    application: stream\n    service:\n      servicePort: 7600\n      visibility: global" > values.yaml
-          microk8s helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.version=local_latest -f values.yaml
+          sudo microk8s helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.version=local_latest -f values.yaml
           sleep 10
 
       - name: Wait for ECLWatch Startup
