@@ -143,22 +143,23 @@ jobs:
           devMode: 'true'
           addons: '["dns", "rbac", "hostpath-storage", "helm"]'
 
-      # - name: Create Docker Image (community)
-      #   uses: docker/build-push-action@v4
-      #   with:
-      #     builder: ${{ steps.buildx.outputs.name }}
-      #     file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
-      #     context: ${{ needs.preamble.outputs.folder_build }}
-      #     outputs: type=docker,dest=/tmp/hpcc_latest.tar
-      #     build-args: |
-      #       PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
-      #     cache-from: |
-      #       type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
+      - name: Create Docker Image (community)
+        uses: docker/build-push-action@v4
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
+          context: ${{ needs.preamble.outputs.folder_build }}
+          outputs: type=docker,dest=/tmp/hpcc_latest.tar
+          tags: localhost:32000/hpcc:local_latest
+          build-args: |
+            PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
+          cache-from: |
+            type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
 
-      # - name: Import Image
-      #   run: |
-      #     sudo microk8s images import < /tmp/hpcc_latest.tar
-      #     sudo microk8s ctr images ls
+      - name: Import Image
+        run: |
+          sudo microk8s images import < /tmp/hpcc_latest.tar
+          sudo microk8s ctr images ls
 
       # Note: IP Address range below is the IP address range that will be made available for load balancers
       # on the host machine, they aren't actual load balancers so they will not be accessible externally
@@ -201,7 +202,7 @@ jobs:
       - name: Install HPCC Cluster
         run: |
           echo -e "certificates:\n  enabled: true\ndafilesrv:\n  - name: rowservice\n    disabled: false\n    application: stream\n    service:\n      servicePort: 7600\n      visibility: global" > values.yaml
-          sudo microk8s helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.version=latest -f values.yaml
+          sudo microk8s helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image=localhost:32000/hpcc:local_latest -f values.yaml
           sleep 10
 
       - name: Wait for ECLWatch Startup
