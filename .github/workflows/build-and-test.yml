@@ -152,13 +152,13 @@ jobs:
           outputs: type=docker,dest=/tmp/hpcc_latest.tar
           build-args: |
             PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
-          tags: local_latest
+          tags: hpcc_local:latest
           cache-from: |
             type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
 
       - name: Import Image
         run: |
-          sudo microk8s ctr image import /tmp/hpcc_latest.tar
+          sudo microk8s images import < /tmp/hpcc_latest.tar
           sudo microk8s ctr images ls
 
       # Note: IP Address range below is the IP address range that will be made available for load balancers
@@ -204,7 +204,7 @@ jobs:
           echo -e "certificates:\n  enabled: true\ndafilesrv:\n  - name: rowservice\n    disabled: false\n    application: stream\n    service:\n      servicePort: 7600\n      visibility: global" > values.yaml
           helm repo add hpcc https://hpcc-systems.github.io/helm-chart
           helm repo update
-          helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.version=local_latest -f values.yaml
+          helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.version=hpcc_local:latest -f values.yaml
           sleep 10
 
       - name: Wait for ECLWatch Startup
