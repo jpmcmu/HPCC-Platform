@@ -150,7 +150,7 @@ jobs:
           file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
           context: ${{ needs.preamble.outputs.folder_build }}
           push: true
-          outputs: type=docker,dest=/tmp/hpcc_latest.tar
+          # outputs: type=docker,dest=/tmp/hpcc_latest.tar
           build-args: |
             PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
           tags: localhost:5000/hpcc:local_latest
