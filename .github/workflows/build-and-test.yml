@@ -150,7 +150,7 @@ jobs:
           file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
           context: ${{ needs.preamble.outputs.folder_build }}
           outputs: type=docker,dest=/tmp/hpcc_latest.tar
-          tags: localhost:32000/hpcc:local_latest
+          tags: hpcc:local_latest
           build-args: |
             PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
           cache-from: |
@@ -202,7 +202,7 @@ jobs:
       - name: Install HPCC Cluster
         run: |
           echo -e "certificates:\n  enabled: true\ndafilesrv:\n  - name: rowservice\n    disabled: false\n    application: stream\n    service:\n      servicePort: 7600\n      visibility: global" > values.yaml
-          sudo microk8s helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image=localhost:32000/hpcc:local_latest -f values.yaml
+          sudo microk8s helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image=hpcc:local_latest -f values.yaml
           sleep 10
 
       - name: Wait for ECLWatch Startup
