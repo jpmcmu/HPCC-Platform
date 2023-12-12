@@ -141,7 +141,7 @@ jobs:
         with:
           channel: '1.27/stable'
           devMode: 'true'
-          addons: '["dns", "rbac", "hostpath-storage", "helm", "regsitry"]'
+          addons: '["dns", "rbac", "hostpath-storage", "helm", "registry"]'
 
       - name: Create Docker Image (community)
         uses: docker/build-push-action@v4
