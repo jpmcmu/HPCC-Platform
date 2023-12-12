@@ -137,11 +137,11 @@ jobs:
           sudo rmdir temp
 
       - name: Install K8s
-        uses: balchua/microk8s-actions@v0.3.2
+        uses: balchua/microk8s-actions@v0.4.0
         with:
-          channel: '1.26/stable'
+          channel: '1.27/stable'
           devMode: 'true'
-          addons: '["dns", "rbac", "hostpath-storage", "registry"]'
+          addons: '["dns", "rbac", "hostpath-storage"]'
 
       - name: Create Docker Image (community)
         uses: docker/build-push-action@v4
@@ -150,12 +150,16 @@ jobs:
           file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
           context: ${{ needs.preamble.outputs.folder_build }}
           push: true
-          # outputs: type=docker,dest=/tmp/hpcc_latest.tar
+          outputs: type=docker,dest=/tmp/hpcc_latest.tar
           build-args: |
             PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
-          tags: localhost:5000/hpcc:local_latest
+          tags: local_latest
           cache-from: |
             type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
+
+      - name: Import Image
+        run: |
+          sudo microk8s images import < /tmp/hpcc_latest.tar
 
       # Note: IP Address range below is the IP address range that will be made available for load balancers
       # on the host machine, they aren't actual load balancers so they will not be accessible externally
