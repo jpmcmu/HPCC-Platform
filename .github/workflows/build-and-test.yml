@@ -141,7 +141,7 @@ jobs:
         with:
           channel: '1.27/stable'
           devMode: 'true'
-          addons: '["dns", "rbac", "hostpath-storage"]'
+          addons: '["dns", "rbac", "hostpath-storage", "helm"]'
 
       - name: Create Docker Image (community)
         uses: docker/build-push-action@v4
@@ -152,7 +152,7 @@ jobs:
           outputs: type=docker,dest=/tmp/hpcc_latest.tar
           build-args: |
             PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
-          tags: hpcc_local:latest
+          tags: local_latest
           cache-from: |
             type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
 
@@ -194,17 +194,15 @@ jobs:
 
       - name: Install JetStack Cert Manager
         run: |
-          helm repo add jetstack https://charts.jetstack.io
-          helm repo update
+          microk8s helm repo add jetstack https://charts.jetstack.io
+          microk8s helm repo update
           kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.crds.yaml
-          helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --version v1.11.0
+          microk8s helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --version v1.11.0
 
       - name: Install HPCC Cluster
         run: |
           echo -e "certificates:\n  enabled: true\ndafilesrv:\n  - name: rowservice\n    disabled: false\n    application: stream\n    service:\n      servicePort: 7600\n      visibility: global" > values.yaml
-          helm repo add hpcc https://hpcc-systems.github.io/helm-chart
-          helm repo update
-          helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.version=hpcc_local:latest -f values.yaml
+          microk8s helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.version=local_latest -f values.yaml
           sleep 10
 
       - name: Wait for ECLWatch Startup
