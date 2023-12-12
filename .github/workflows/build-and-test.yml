@@ -187,15 +187,15 @@ jobs:
           [x509_ca]
           basicConstraints=CA:true,pathlen:1" > ca-req.cfg
           openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -sha256 -days 1825 -out ca.crt -config ca-req.cfg
-          kubectl create secret tls hpcc-signing-issuer-key-pair --cert=ca.crt --key=ca.key
-          kubectl create secret tls hpcc-local-issuer-key-pair --cert=ca.crt --key=ca.key
+          sudo microk8s kubectl create secret tls hpcc-signing-issuer-key-pair --cert=ca.crt --key=ca.key
+          sudo microk8s kubectl create secret tls hpcc-local-issuer-key-pair --cert=ca.crt --key=ca.key
           sudo keytool -import -trustcacerts -cacerts -storepass changeit -noprompt -alias hpcc-local-issuer -file ca.crt
 
       - name: Install JetStack Cert Manager
         run: |
           sudo microk8s helm repo add jetstack https://charts.jetstack.io
           sudo microk8s helm repo update
-          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.crds.yaml
+          sudo microk8s kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.crds.yaml
           sudo microk8s helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --version v1.11.0
 
       - name: Install HPCC Cluster
@@ -206,16 +206,16 @@ jobs:
 
       - name: Wait for ECLWatch Startup
         run: |
-          kubectl get pods
-          echo "Waiting for ECLWatch startup" && kubectl wait --for=condition=ready pod --timeout=180s -l app=eclwatch
-          echo "Waiting for Rowservice startup" && kubectl wait --for=condition=ready pod --timeout=180s -l server=rowservice
-          echo "Waiting for SQL2ECL startup" && kubectl wait --for=condition=ready pod --timeout=180s -l app=sql2ecl
-          echo "ECLWATCH_IP=$(kubectl get svc eclwatch -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
-          echo "ROWSERVICE_IP=$(kubectl get svc rowservice -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
-          echo "SQL_TO_ECL_IP=$(kubectl get svc sql2ecl -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
-          kubectl get pods
-          kubectl get svc
-          kubectl get deployments -o wide
+          sudo microk8s kubectl get pods
+          echo "Waiting for ECLWatch startup" && sudo microk8s kubectl wait --for=condition=ready pod --timeout=180s -l app=eclwatch
+          echo "Waiting for Rowservice startup" && sudo microk8s kubectl wait --for=condition=ready pod --timeout=180s -l server=rowservice
+          echo "Waiting for SQL2ECL startup" && sudo microk8s kubectl wait --for=condition=ready pod --timeout=180s -l app=sql2ecl
+          echo "ECLWATCH_IP=$(sudo microk8s kubectl get svc eclwatch -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
+          echo "ROWSERVICE_IP=$(sudo microk8s kubectl get svc rowservice -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
+          echo "SQL_TO_ECL_IP=$(sudo microk8s kubectl get svc sql2ecl -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
+          sudo microk8s kubectl get pods
+          sudo microk8s kubectl get svc
+          sudo microk8s kubectl get deployments -o wide
 
       - name: Add Host File Entries
         run: |
