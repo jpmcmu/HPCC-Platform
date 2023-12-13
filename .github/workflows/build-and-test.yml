@@ -150,7 +150,7 @@ jobs:
           file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
           context: ${{ needs.preamble.outputs.folder_build }}
           outputs: type=docker,dest=/tmp/hpcc_latest.tar
-          tags: hpcc_local:latest
+          tags: hpcc_local/platform-core:latest
           build-args: |
             PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
           cache-from: |
@@ -160,7 +160,7 @@ jobs:
         run: |
           sudo microk8s images import < /tmp/hpcc_latest.tar
           sudo microk8s ctr images ls
-          sudo microk8s kubectl run hpcctest --image=hpcc_local:latest --restart=Never
+          sudo microk8s kubectl run hpcctest --image=hpcc_local/platform-core:latest --restart=Never
 
       # Note: IP Address range below is the IP address range that will be made available for load balancers
       # on the host machine, they aren't actual load balancers so they will not be accessible externally
