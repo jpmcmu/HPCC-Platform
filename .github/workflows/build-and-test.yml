@@ -160,17 +160,17 @@ jobs:
           builder: ${{ steps.buildx.outputs.name }}
           file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
           context: ${{ needs.preamble.outputs.folder_build }}
-          push: true
-          # outputs: type=docker,dest=/tmp/hpcc_latest.tar
+          # push: true
+          outputs: type=docker,dest=/tmp/hpcc_latest.tar
           tags: localhost:32000/hpcclocal/platform-core:latest
           build-args: |
             PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
           cache-from: |
             type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
 
-      # - name: Import Image
-      #   run: |
-      #     sudo microk8s images import < /tmp/hpcc_latest.tar
+      - name: Import Image
+        run: |
+          sudo microk8s images import < /tmp/hpcc_latest.tar
 
       - name: Test POD
         run: |
