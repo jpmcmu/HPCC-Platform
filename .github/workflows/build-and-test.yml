@@ -135,6 +135,7 @@ jobs:
           sudo rm -rf ${{ needs.preamble.outputs.folder_build }}/*
           sudo mv temp/* ${{ needs.preamble.outputs.folder_build }}/
           sudo rmdir temp
+          docker image prune
 
       - name: Install K8s
         uses: balchua/microk8s-actions@v0.4.0
@@ -151,8 +152,6 @@ jobs:
       - name: Wait for registry startup
         run: |
           sudo microk8s kubectl wait pods --for=jsonpath='{.status.phase}'=Running -l app=registry -n container-registry --timeout=90s
-          curl http://localhost:32000/v2/_catalog
-
 
       - name: Create Docker Image (community)
         uses: docker/build-push-action@v4
@@ -161,28 +160,15 @@ jobs:
           file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
           context: ${{ needs.preamble.outputs.folder_build }}
           push: true
-          # outputs: type=docker,dest=/tmp/hpcc_latest.tar
-          #tags: localhost:32000/hpcclocal/platform-core:latest
           tags: localhost:32000/hpccsystems/platform-core:latest
           build-args: |
             PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
           cache-from: |
             type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
 
-      # - name: Import Image
-      #   run: |
-      #     curl http://localhost:32000/v2/_catalog
-      #     sudo microk8s images import < /tmp/hpcc_latest.tar
-      #     curl http://localhost:32000/v2/_catalog
-
-      - name: Test POD
+      - name: Check Local Repository
         run: |
           curl http://localhost:32000/v2/_catalog
-          sudo microk8s ctr images ls
-          sudo microk8s kubectl run hpcctest --image=localhost:32000/hpccsystems/platform-core:latest --restart=Never
-          sleep 100
-          sudo microk8s kubectl get pods
-          sudo microk8s kubectl logs hpcctest
 
       # Note: IP Address range below is the IP address range that will be made available for load balancers
       # on the host machine, they aren't actual load balancers so they will not be accessible externally
