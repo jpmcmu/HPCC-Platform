@@ -143,24 +143,39 @@ jobs:
           devMode: 'true'
           addons: '["dns", "rbac", "hostpath-storage", "helm", "registry"]'
 
+      - name: Check User
+        run: |
+          id
+          sg microk8s -c 'microk8s status'
+
+      - name: Wait for registry startup
+        run: |
+          sudo microk8s kubectl wait pods --for=jsonpath='{.status.phase}'=Running -l app=registry -n container-registry --timeout=90s
+          curl http://localhost:32000/v2/_catalog
+
+
       - name: Create Docker Image (community)
         uses: docker/build-push-action@v4
         with:
           builder: ${{ steps.buildx.outputs.name }}
           file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
           context: ${{ needs.preamble.outputs.folder_build }}
-          outputs: type=docker,dest=/tmp/hpcc_latest.tar
-          tags: hpcclocal/platform-core:latest
+          push: true
+          # outputs: type=docker,dest=/tmp/hpcc_latest.tar
+          tags: localhost:32000/hpcclocal/platform-core:latest
           build-args: |
             PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
           cache-from: |
             type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
 
-      - name: Import Image
+      # - name: Import Image
+      #   run: |
+      #     sudo microk8s images import < /tmp/hpcc_latest.tar
+
+      - name: Test POD
         run: |
-          sudo microk8s images import < /tmp/hpcc_latest.tar
           sudo microk8s ctr images ls
-          sudo microk8s kubectl run hpcctest --image=hpcclocal/platform-core:latest --restart=Never
+          sudo microk8s kubectl run hpcctest --image=localhost:32000/hpcclocal/platform-core:latest --restart=Never
           sleep 10
           sudo microk8s kubectl get pods
           microk8s kubectl logs hpcctest
@@ -206,7 +221,7 @@ jobs:
       - name: Install HPCC Cluster
         run: |
           echo -e "certificates:\n  enabled: true\ndafilesrv:\n  - name: rowservice\n    disabled: false\n    application: stream\n    service:\n      servicePort: 7600\n      visibility: global" > values.yaml
-          sudo microk8s helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.root=hpcclocal --set global.image.version=latest -f values.yaml
+          sudo microk8s helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.root=localhost:32000/hpcclocal --set global.image.version=latest -f values.yaml
           sleep 10
 
       - name: Wait for ECLWatch Startup
