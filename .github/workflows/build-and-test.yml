@@ -172,13 +172,13 @@ jobs:
       #   run: |
       #     sudo microk8s images import < /tmp/hpcc_latest.tar
 
-      # - name: Test POD
-      #   run: |
-      #     sudo microk8s ctr images ls
-      #     sudo microk8s kubectl run hpcctest --image=localhost:32000/hpcclocal/platform-core:latest --restart=Never
-      #     sleep 100
-      #     sudo microk8s kubectl get pods
-      #     sudo microk8s kubectl logs hpcctest
+      - name: Test POD
+        run: |
+          sudo microk8s ctr images ls
+          sudo microk8s kubectl run hpcctest --image=localhost:32000/hpcclocal/platform-core:latest --restart=Never
+          sleep 100
+          sudo microk8s kubectl get pods
+          sudo microk8s kubectl logs hpcctest
 
       # Note: IP Address range below is the IP address range that will be made available for load balancers
       # on the host machine, they aren't actual load balancers so they will not be accessible externally
