@@ -178,7 +178,7 @@ jobs:
           sudo microk8s kubectl run hpcctest --image=localhost:32000/hpcclocal/platform-core:latest --restart=Never
           sleep 10
           sudo microk8s kubectl get pods
-          microk8s kubectl logs hpcctest
+          sudo microk8s kubectl logs hpcctest
 
       # Note: IP Address range below is the IP address range that will be made available for load balancers
       # on the host machine, they aren't actual load balancers so they will not be accessible externally
