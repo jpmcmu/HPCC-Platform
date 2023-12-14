@@ -160,9 +160,10 @@ jobs:
           builder: ${{ steps.buildx.outputs.name }}
           file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
           context: ${{ needs.preamble.outputs.folder_build }}
-          push: true
+          # push: true
           outputs: type=docker,dest=/tmp/hpcc_latest.tar
-          tags: localhost:32000/hpcclocal/platform-core:latest
+          #tags: localhost:32000/hpcclocal/platform-core:latest
+          tags: latest
           build-args: |
             PKG_FILE=${{ steps.container.outputs.k8s_pkg_file }}
           cache-from: |
@@ -174,13 +175,13 @@ jobs:
           sudo microk8s images import < /tmp/hpcc_latest.tar
           curl http://localhost:32000/v2/_catalog
 
-      - name: Test POD
-        run: |
-          sudo microk8s ctr images ls
-          sudo microk8s kubectl run hpcctest --image=localhost:32000/hpcclocal/platform-core:latest --restart=Never
-          sleep 100
-          sudo microk8s kubectl get pods
-          sudo microk8s kubectl logs hpcctest
+      # - name: Test POD
+      #   run: |
+      #     sudo microk8s ctr images ls
+      #     sudo microk8s kubectl run hpcctest --image=localhost:32000/hpcclocal/platform-core:latest --restart=Never
+      #     sleep 100
+      #     sudo microk8s kubectl get pods
+      #     sudo microk8s kubectl logs hpcctest
 
       # Note: IP Address range below is the IP address range that will be made available for load balancers
       # on the host machine, they aren't actual load balancers so they will not be accessible externally
@@ -220,10 +221,11 @@ jobs:
           sudo microk8s kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.crds.yaml
           sudo microk8s helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --version v1.11.0
 
+      # sudo microk8s helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.root=localhost:32000/hpcclocal --set global.image.version=latest -f values.yaml
       - name: Install HPCC Cluster
         run: |
           echo -e "certificates:\n  enabled: true\ndafilesrv:\n  - name: rowservice\n    disabled: false\n    application: stream\n    service:\n      servicePort: 7600\n      visibility: global" > values.yaml
-          sudo microk8s helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.root=localhost:32000/hpcclocal --set global.image.version=latest -f values.yaml
+          sudo microk8s helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.version=latest -f values.yaml
           sleep 10
 
       - name: Wait for ECLWatch Startup
@@ -237,6 +239,7 @@ jobs:
           echo "SQL_TO_ECL_IP=$(sudo microk8s kubectl get svc sql2ecl -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
           sudo microk8s kubectl get pods
           sudo microk8s kubectl get svc
+          sudo microk8s kubectl get pods --all-namespaces -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[*].imageID}{"\n"}{end}' | awk -F: '{print $NF}'
           sudo microk8s kubectl get deployments -o wide
 
       - name: Add Host File Entries
