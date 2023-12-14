@@ -161,6 +161,8 @@ jobs:
           sudo microk8s images import < /tmp/hpcc_latest.tar
           sudo microk8s ctr images ls
           sudo microk8s kubectl run hpcctest --image=localhost:32000/platform-core:latest --restart=Never
+          sleep 10
+          sudo microk8s kubectl get pods
 
       # Note: IP Address range below is the IP address range that will be made available for load balancers
       # on the host machine, they aren't actual load balancers so they will not be accessible externally
@@ -203,7 +205,7 @@ jobs:
       - name: Install HPCC Cluster
         run: |
           echo -e "certificates:\n  enabled: true\ndafilesrv:\n  - name: rowservice\n    disabled: false\n    application: stream\n    service:\n      servicePort: 7600\n      visibility: global" > values.yaml
-          sudo microk8s helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.root=localhost:32000--set global.image.version=latest -f values.yaml
+          sudo microk8s helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.root=localhost:32000 --set global.image.version=latest -f values.yaml
           sleep 10
 
       - name: Wait for ECLWatch Startup
