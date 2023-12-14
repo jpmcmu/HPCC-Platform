@@ -171,6 +171,7 @@ jobs:
       - name: Import Image
         run: |
           sudo microk8s images import < /tmp/hpcc_latest.tar
+          curl http://localhost:32000/v2/_catalog
 
       - name: Test POD
         run: |
