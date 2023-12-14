@@ -135,6 +135,7 @@ jobs:
           sudo rm -rf ${{ needs.preamble.outputs.folder_build }}/*
           sudo mv temp/* ${{ needs.preamble.outputs.folder_build }}/
           sudo rmdir temp
+          docker container prune
           docker image prune
 
       - name: Install K8s
@@ -216,6 +217,8 @@ jobs:
 
       - name: Wait for ECLWatch Startup
         run: |
+          sudo microk8s kubectl get pods
+          sleep 300
           sudo microk8s kubectl get pods
           echo "Waiting for ECLWatch startup" && sudo microk8s kubectl wait --for=condition=ready pod --timeout=180s -l app=eclwatch
           echo "Waiting for Rowservice startup" && sudo microk8s kubectl wait --for=condition=ready pod --timeout=180s -l server=rowservice
