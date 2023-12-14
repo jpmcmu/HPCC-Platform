@@ -160,7 +160,7 @@ jobs:
           builder: ${{ steps.buildx.outputs.name }}
           file: ${{ needs.preamble.outputs.folder_platform }}/dockerfiles/vcpkg/${{ env.os }}.dockerfile
           context: ${{ needs.preamble.outputs.folder_build }}
-          # push: true
+          push: true
           outputs: type=docker,dest=/tmp/hpcc_latest.tar
           tags: localhost:32000/hpcclocal/platform-core:latest
           build-args: |
@@ -170,6 +170,7 @@ jobs:
 
       - name: Import Image
         run: |
+          curl http://localhost:32000/v2/_catalog
           sudo microk8s images import < /tmp/hpcc_latest.tar
           curl http://localhost:32000/v2/_catalog
 
