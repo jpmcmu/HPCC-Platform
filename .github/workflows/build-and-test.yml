@@ -219,6 +219,10 @@ jobs:
         run: |
           sudo microk8s kubectl get pods
           sleep 300
+          sudo microk8s kubectl logs -l app=eclwatch
+          sudo microk8s kubectl describe pods -l app=eclwatch
+          sudo microk8s kubectl get events --sort-by=.metadata.creationTimestamp
+          sudo microk8s kubectl get pods --all-namespaces -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[*].imageID}{"\n"}{end}' | awk -F: '{print $NF}'
           sudo microk8s kubectl get pods
           echo "Waiting for ECLWatch startup" && sudo microk8s kubectl wait --for=condition=ready pod --timeout=180s -l app=eclwatch
           echo "Waiting for Rowservice startup" && sudo microk8s kubectl wait --for=condition=ready pod --timeout=180s -l server=rowservice
@@ -228,11 +232,6 @@ jobs:
           echo "SQL_TO_ECL_IP=$(sudo microk8s kubectl get svc sql2ecl -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
           sudo microk8s kubectl get pods
           sudo microk8s kubectl get svc
-          sudo microk8s kubectl get pods --all-namespaces -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[*].imageID}{"\n"}{end}' | awk -F: '{print $NF}'
-          sudo microk8s kubectl get deployments -o wide
-          sudo microk8s kubectl logs -l app=eclwatch
-          sudo microk8s kubectl describe pods -l app=eclwatch
-          sudo microk8s kubectl get events --sort-by=.metadata.creationTimestamp
 
       - name: Add Host File Entries
         run: |
