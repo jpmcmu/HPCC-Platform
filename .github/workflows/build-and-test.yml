@@ -210,6 +210,16 @@ jobs:
           sudo microk8s kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.crds.yaml
           sudo microk8s helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --version v1.11.0
 
+      - name: Test POD
+        run: |
+          sudo microk8s kubectl run hpccpubtest --image=hpccsystems/platform-core:latest --restart=Never
+          sudo microk8s kubectl run hpccbuilttest --image=localhost:32000/hpccsystems/platform-core:latest --restart=Never
+          sleep 100
+          sudo microk8s kubectl get pods
+          sudo microk8s kubectl logs hpccbuilttest
+          sudo microk8s kubectl describe pods hpccbuilttest
+          sudo microk8s kubectl get events --sort-by=.metadata.creationTimestamp
+
       - name: Install HPCC Cluster
         run: |
           echo -e "certificates:\n  enabled: true\ndafilesrv:\n  - name: rowservice\n    disabled: false\n    application: stream\n    service:\n      servicePort: 7600\n      visibility: global" > values.yaml
