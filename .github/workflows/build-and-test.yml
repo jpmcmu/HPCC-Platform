@@ -216,9 +216,9 @@ jobs:
           sudo microk8s kubectl run hpccbuilttest --image=localhost:32000/hpccsystems/platform-core:latest --restart=Never
           sleep 100
           sudo microk8s kubectl get pods
+          sudo microk8s kubectl get events --sort-by=.metadata.creationTimestamp
           sudo microk8s kubectl logs hpccbuilttest
           sudo microk8s kubectl describe pods hpccbuilttest
-          sudo microk8s kubectl get events --sort-by=.metadata.creationTimestamp
 
       - name: Install HPCC Cluster
         run: |
