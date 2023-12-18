@@ -131,12 +131,12 @@ jobs:
             cmake -S /hpcc-dev/HPCC-Platform -B /hpcc-dev/build ${{ needs.preamble.outputs.cmake_docker_config }} -DSIGN_MODULES_PASSPHRASE=${{ secrets.SIGN_MODULES_PASSPHRASE }} -DSIGN_MODULES_KEYID=${{ secrets.SIGN_MODULES_KEYID }} -DINCLUDE_PLUGINS=ON -DCONTAINERIZED=ON -DSUPPRESS_REMBED=ON -DSUPPRESS_V8EMBED=ON -DSUPPRESS_SPARK=ON -DCPACK_STRIP_FILES=ON ${{ matrix.cmake_options_extra }} && \
             cmake --build /hpcc-dev/build --parallel $(nproc) --target package"
           df -h
-          mkdir temp
-          sudo mv ${{ needs.preamble.outputs.folder_build }}/*.deb temp/
-          sudo rm -rf ${{ needs.preamble.outputs.folder_build }}/*
-          sudo mv temp/* ${{ needs.preamble.outputs.folder_build }}/
-          sudo rmdir temp
-          df -h
+          # mkdir temp
+          # sudo mv ${{ needs.preamble.outputs.folder_build }}/*.deb temp/
+          # sudo rm -rf ${{ needs.preamble.outputs.folder_build }}/*
+          # sudo mv temp/* ${{ needs.preamble.outputs.folder_build }}/
+          # sudo rmdir temp
+          # df -h
 
       - name: Install K8s
         uses: balchua/microk8s-actions@v0.4.0
@@ -167,9 +167,9 @@ jobs:
           cache-from: |
             type=registry,ref=hpccsystems/platform-core-${{ env.os }}:${{ needs.preamble.outputs.candidate_base_branch }}
 
-      - name: Check Local Repository
+      - name: Cleanup Build Dir
         run: |
-          curl http://localhost:32000/v2/_catalog
+          sudo rm -rf ${{ needs.preamble.outputs.folder_build }}/*
 
       # Note: IP Address range below is the IP address range that will be made available for load balancers
       # on the host machine, they aren't actual load balancers so they will not be accessible externally
