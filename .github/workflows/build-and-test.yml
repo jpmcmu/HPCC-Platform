@@ -215,16 +215,19 @@ jobs:
           sleep 100
           sudo microk8s kubectl get pods
           sudo microk8s kubectl get events --sort-by=.metadata.creationTimestamp
+          df -h
 
       - name: Install HPCC Cluster
         run: |
           echo -e "certificates:\n  enabled: true\ndafilesrv:\n  - name: rowservice\n    disabled: false\n    application: stream\n    service:\n      servicePort: 7600\n      visibility: global" > values.yaml
           sudo microk8s helm install myhpcc ${{ needs.preamble.outputs.folder_platform }}/helm/hpcc --set global.image.root=localhost:32000/hpccsystems --set global.image.version=latest -f values.yaml
           sleep 10
+          df -h
 
       - name: Wait for ECLWatch Startup
         run: |
           sudo microk8s kubectl get pods
+          df -h
           sleep 300
           sudo microk8s kubectl logs -l app=eclwatch
           sudo microk8s kubectl describe pods -l app=eclwatch
