@@ -130,15 +130,13 @@ jobs:
           docker run --rm --mount ${{ needs.preamble.outputs.mount_platform }} --mount ${{ needs.preamble.outputs.mount_build }} ${{ steps.vars.outputs.docker_tag_candidate_base }} "${{ needs.preamble.outputs.gpg_import }} && \
             cmake -S /hpcc-dev/HPCC-Platform -B /hpcc-dev/build ${{ needs.preamble.outputs.cmake_docker_config }} -DSIGN_MODULES_PASSPHRASE=${{ secrets.SIGN_MODULES_PASSPHRASE }} -DSIGN_MODULES_KEYID=${{ secrets.SIGN_MODULES_KEYID }} -DINCLUDE_PLUGINS=ON -DCONTAINERIZED=ON -DSUPPRESS_REMBED=ON -DSUPPRESS_V8EMBED=ON -DSUPPRESS_SPARK=ON -DCPACK_STRIP_FILES=ON ${{ matrix.cmake_options_extra }} && \
             cmake --build /hpcc-dev/build --parallel $(nproc) --target package"
+          df -h
           mkdir temp
           sudo mv ${{ needs.preamble.outputs.folder_build }}/*.deb temp/
           sudo rm -rf ${{ needs.preamble.outputs.folder_build }}/*
           sudo mv temp/* ${{ needs.preamble.outputs.folder_build }}/
           sudo rmdir temp
-          sleep 60
-          docker container prune
-          docker image prune
-          du -hd1
+          df -h
 
       - name: Install K8s
         uses: balchua/microk8s-actions@v0.4.0
@@ -213,13 +211,10 @@ jobs:
 
       - name: Test POD
         run: |
-          sudo microk8s kubectl run hpccpubtest --image=hpccsystems/platform-core:latest --restart=Never
-          sudo microk8s kubectl run hpccbuilttest --image=localhost:32000/hpccsystems/platform-core:latest --restart=Never
+          sudo microk8s kubectl run hpcctest --image=localhost:32000/hpccsystems/platform-core:latest --restart=Never
           sleep 100
           sudo microk8s kubectl get pods
           sudo microk8s kubectl get events --sort-by=.metadata.creationTimestamp
-          sudo microk8s kubectl logs hpccbuilttest
-          sudo microk8s kubectl describe pods hpccbuilttest
 
       - name: Install HPCC Cluster
         run: |
