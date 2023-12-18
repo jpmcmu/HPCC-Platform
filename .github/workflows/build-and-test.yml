@@ -152,7 +152,7 @@ jobs:
 
       - name: Wait for registry startup
         run: |
-          sudo microk8s kubectl wait pods --for=jsonpath='{.status.phase}'=Running -l app=registry -n container-registry --timeout=90s
+          kubectl wait pods --for=jsonpath='{.status.phase}'=Running -l app=registry -n container-registry --timeout=90s
 
       - name: Create Docker Image (community)
         uses: docker/build-push-action@v4
@@ -198,24 +198,24 @@ jobs:
           [x509_ca]
           basicConstraints=CA:true,pathlen:1" > ca-req.cfg
           openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -sha256 -days 1825 -out ca.crt -config ca-req.cfg
-          sudo microk8s kubectl create secret tls hpcc-signing-issuer-key-pair --cert=ca.crt --key=ca.key
-          sudo microk8s kubectl create secret tls hpcc-local-issuer-key-pair --cert=ca.crt --key=ca.key
+          kubectl create secret tls hpcc-signing-issuer-key-pair --cert=ca.crt --key=ca.key
+          kubectl create secret tls hpcc-local-issuer-key-pair --cert=ca.crt --key=ca.key
           sudo keytool -import -trustcacerts -cacerts -storepass changeit -noprompt -alias hpcc-local-issuer -file ca.crt
 
       - name: Install JetStack Cert Manager
         run: |
           sudo microk8s helm repo add jetstack https://charts.jetstack.io
           sudo microk8s helm repo update
-          sudo microk8s kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.crds.yaml
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.crds.yaml
           sudo microk8s helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --version v1.11.0
 
-      - name: Test POD
-        run: |
-          sudo microk8s kubectl run hpcctest --image=localhost:32000/hpccsystems/platform-core:latest --restart=Never
-          sleep 100
-          sudo microk8s kubectl get pods
-          sudo microk8s kubectl get events --sort-by=.metadata.creationTimestamp
-          df -h
+      # - name: Test POD
+      #   run: |
+      #     kubectl run hpcctest --image=localhost:32000/hpccsystems/platform-core:latest --restart=Never
+      #     sleep 100
+      #     kubectl get pods
+      #     kubectl get events --sort-by=.metadata.creationTimestamp
+      #     df -h
 
       - name: Install HPCC Cluster
         run: |
@@ -226,22 +226,22 @@ jobs:
 
       - name: Wait for ECLWatch Startup
         run: |
-          sudo microk8s kubectl get pods
+          kubectl get pods
           df -h
           sleep 300
-          sudo microk8s kubectl logs -l app=eclwatch
-          sudo microk8s kubectl describe pods -l app=eclwatch
-          sudo microk8s kubectl get events --sort-by=.metadata.creationTimestamp
-          sudo microk8s kubectl get pods --all-namespaces -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[*].imageID}{"\n"}{end}' | awk -F: '{print $NF}'
-          sudo microk8s kubectl get pods
-          echo "Waiting for ECLWatch startup" && sudo microk8s kubectl wait --for=condition=ready pod --timeout=180s -l app=eclwatch
-          echo "Waiting for Rowservice startup" && sudo microk8s kubectl wait --for=condition=ready pod --timeout=180s -l server=rowservice
-          echo "Waiting for SQL2ECL startup" && sudo microk8s kubectl wait --for=condition=ready pod --timeout=180s -l app=sql2ecl
-          echo "ECLWATCH_IP=$(sudo microk8s kubectl get svc eclwatch -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
-          echo "ROWSERVICE_IP=$(sudo microk8s kubectl get svc rowservice -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
-          echo "SQL_TO_ECL_IP=$(sudo microk8s kubectl get svc sql2ecl -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
-          sudo microk8s kubectl get pods
-          sudo microk8s kubectl get svc
+          kubectl logs -l app=eclwatch
+          kubectl describe pods -l app=eclwatch
+          kubectl get events --sort-by=.metadata.creationTimestamp
+          kubectl get pods --all-namespaces -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[*].imageID}{"\n"}{end}' | awk -F: '{print $NF}'
+          kubectl get pods
+          echo "Waiting for ECLWatch startup" && kubectl wait --for=condition=ready pod --timeout=180s -l app=eclwatch
+          echo "Waiting for Rowservice startup" && kubectl wait --for=condition=ready pod --timeout=180s -l server=rowservice
+          echo "Waiting for SQL2ECL startup" && kubectl wait --for=condition=ready pod --timeout=180s -l app=sql2ecl
+          echo "ECLWATCH_IP=$(kubectl get svc eclwatch -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
+          echo "ROWSERVICE_IP=$(kubectl get svc rowservice -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
+          echo "SQL_TO_ECL_IP=$(kubectl get svc sql2ecl -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
+          kubectl get pods
+          kubectl get svc
 
       - name: Add Host File Entries
         run: |
