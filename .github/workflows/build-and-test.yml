@@ -211,11 +211,7 @@ jobs:
 
       - name: Test POD
         run: |
-          docker run -it --rm localhost:32000/hpccsystems/platform-core:latest /bin/sh
-          ls /
-          ls /opt/HPCCSystems/bin/
-          ls /var/lib/HPCCSystems/
-          exit
+          docker run -i --rm localhost:32000/hpccsystems/platform-core:latest /bin/sh -c "ls / && ls /opt/HPCCSystems/bin/ && ls /var/lib/HPCCSystems/"
 
       - name: Install HPCC Cluster
         run: |
