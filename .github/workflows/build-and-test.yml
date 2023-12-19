@@ -128,15 +128,12 @@ jobs:
           sudo rm -f ${{ needs.preamble.outputs.folder_build }}/CMakeCache.txt
           sudo rm -rf ${{ needs.preamble.outputs.folder_build }}/CMakeFiles
           docker run --rm --mount ${{ needs.preamble.outputs.mount_platform }} --mount ${{ needs.preamble.outputs.mount_build }} ${{ steps.vars.outputs.docker_tag_candidate_base }} "${{ needs.preamble.outputs.gpg_import }} && \
+            cmake -S /hpcc-dev/HPCC-Platform -B /hpcc-dev/build ${{ needs.preamble.outputs.cmake_docker_config }} -DSIGN_MODULES_PASSPHRASE=${{ secrets.SIGN_MODULES_PASSPHRASE }} -DSIGN_MODULES_KEYID=${{ secrets.SIGN_MODULES_KEYID }} -DINCLUDE_PLUGINS=ON -DCONTAINERIZED=ON -DSUPPRESS_REMBED=ON -DSUPPRESS_V8EMBED=ON -DSUPPRESS_SPARK=ON -DCPACK_STRIP_FILES=OFF ${{ matrix.cmake_options_extra }} && \
+            cmake --build /hpcc-dev/build --parallel $(nproc) --target package"
+          docker run --rm --mount ${{ needs.preamble.outputs.mount_platform }} --mount ${{ needs.preamble.outputs.mount_build }} ${{ steps.vars.outputs.docker_tag_candidate_base }} "${{ needs.preamble.outputs.gpg_import }} && \
             cmake -S /hpcc-dev/HPCC-Platform -B /hpcc-dev/build ${{ needs.preamble.outputs.cmake_docker_config }} -DSIGN_MODULES_PASSPHRASE=${{ secrets.SIGN_MODULES_PASSPHRASE }} -DSIGN_MODULES_KEYID=${{ secrets.SIGN_MODULES_KEYID }} -DINCLUDE_PLUGINS=ON -DCONTAINERIZED=ON -DSUPPRESS_REMBED=ON -DSUPPRESS_V8EMBED=ON -DSUPPRESS_SPARK=ON -DCPACK_STRIP_FILES=ON ${{ matrix.cmake_options_extra }} && \
             cmake --build /hpcc-dev/build --parallel $(nproc) --target package"
           df -h
-          # mkdir temp
-          # sudo mv ${{ needs.preamble.outputs.folder_build }}/*.deb temp/
-          # sudo rm -rf ${{ needs.preamble.outputs.folder_build }}/*
-          # sudo mv temp/* ${{ needs.preamble.outputs.folder_build }}/
-          # sudo rmdir temp
-          # df -h
 
       - name: Install K8s
         uses: balchua/microk8s-actions@v0.4.0
@@ -144,11 +141,6 @@ jobs:
           channel: '1.27/stable'
           devMode: 'true'
           addons: '["dns", "rbac", "hostpath-storage", "helm", "registry"]'
-
-      - name: Check User
-        run: |
-          id
-          sg microk8s -c 'microk8s status'
 
       - name: Wait for registry startup
         run: |
@@ -208,10 +200,6 @@ jobs:
           sudo microk8s helm repo update
           kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.crds.yaml
           sudo microk8s helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --version v1.11.0
-
-      - name: Test POD
-        run: |
-          docker run -i --rm localhost:32000/hpccsystems/platform-core:latest /bin/sh -c "ls / && ls /opt/HPCCSystems/bin/ && ls /var/lib/HPCCSystems/"
 
       - name: Install HPCC Cluster
         run: |
