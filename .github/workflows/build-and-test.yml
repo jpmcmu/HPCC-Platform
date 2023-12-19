@@ -209,13 +209,13 @@ jobs:
           kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.11.0/cert-manager.crds.yaml
           sudo microk8s helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --version v1.11.0
 
-      # - name: Test POD
-      #   run: |
-      #     kubectl run hpcctest --image=localhost:32000/hpccsystems/platform-core:latest --restart=Never
-      #     sleep 100
-      #     kubectl get pods
-      #     kubectl get events --sort-by=.metadata.creationTimestamp
-      #     df -h
+      - name: Test POD
+        run: |
+          docker run -it --rm localhost:32000/hpccsystems/platform-core:latest /bin/sh
+          ls /
+          ls /opt/HPCCSystems/bin/
+          ls /var/lib/HPCCSystems/
+          exit
 
       - name: Install HPCC Cluster
         run: |
