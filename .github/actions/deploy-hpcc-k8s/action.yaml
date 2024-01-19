@@ -46,12 +46,11 @@ runs:
         kubectl wait pods --for=jsonpath='{.status.phase}'=Running -l app=registry -n container-registry --timeout=90s
       shell: bash
 
-    - name: Find & Move Package
+    - name: Find Package
       run: |
         k8s_pkg_path=$(ls -t ./${{ inputs.asset-name }}/*.deb 2>/dev/null | head -1)
         k8s_pkg_file=$(basename "$k8s_pkg_path")
-        mv ${k8s_pkg_path} ${{ inputs.platform-folder }}/${k8s_pkg_file}
-        echo "k8s_pkg_file=$k8s_pkg_file" >> $GITHUB_ENV
+        echo "k8s_pkg_path=$k8s_pkg_path" >> $GITHUB_ENV
         echo "$k8s_pkg_file"
       shell: bash
 
@@ -80,7 +79,7 @@ runs:
         push: true
         tags: localhost:32000/hpccsystems/platform-core:latest
         build-args: |
-          PKG_FILE=${{ env.k8s_pkg_file }}
+          PKG_FILE=${{ env.k8s_pkg_path }}
         cache-from: |
           type=registry,ref=hpccsystems/platform-core-${{ inputs.os }}:${{ steps.vars.outputs.candidate_base_branch }}
 
@@ -146,12 +145,11 @@ runs:
         sudo microk8s helm install myhpcc ${{ inputs.platform-folder }}/helm/hpcc --set global.image.root=localhost:32000/hpccsystems --set global.image.version=latest -f values.yaml
       shell: bash
 
-    - name: Wait for ECLWatch Startup
+    - name: Wait for Deployment Rollout & Grab Service IPs
       run: |
         sleep 10
-        echo "Waiting for ECLWatch startup" && kubectl wait --for=condition=ready pod --timeout=180s -l app=eclwatch
-        echo "Waiting for Rowservice startup" && kubectl wait --for=condition=ready pod --timeout=180s -l server=rowservice
-        echo "Waiting for SQL2ECL startup" && kubectl wait --for=condition=ready pod --timeout=180s -l app=sql2ecl
+        deploy=$(kubectl get deploy -o name)
+        for i in $deploy; do kubectl rollout status $i -w --timeout=180s; done
         echo "ECLWATCH_IP=$(kubectl get svc eclwatch -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
         echo "ROWSERVICE_IP=$(kubectl get svc rowservice -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
         echo "SQL_TO_ECL_IP=$(kubectl get svc sql2ecl -o jsonpath='{.spec.clusterIP}')" >> $GITHUB_ENV
