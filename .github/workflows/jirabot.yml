@@ -127,7 +127,7 @@ jobs:
                         jira.session()
                         break
                     except Exception as error:
-                        print('Authentication failed, retrying in 10s.')
+                        print('Service account authentication failed, retrying in 10s.')
                         time.sleep(10)
                         jira = JIRA(options=options, basic_auth=(jirabot_user, jirabot_pass))
 
