@@ -14,7 +14,7 @@ jobs:
   jirabot:
     runs-on: ubuntu-20.04
     steps:
-      - uses: "actions/setup-python@v2"
+      - uses: "actions/setup-python@v5"
         with:
           python-version: "3.8"
       - name: "Install dependencies"
@@ -43,6 +43,7 @@ jobs:
         run: |
             import os
             import re
+            import time
             import json
             from jira.client import JIRA
 
@@ -119,18 +120,20 @@ jobs:
 
                 jira = JIRA(options=options, basic_auth=(jirabot_user, jirabot_pass))
 
-                # Need to change how we find users for Jira Cloud, unfortunately the API doesn't provide this information.
-                # At the moment checking if the URL contains atlassian.net appears to be the easiest way to determine if it's Jira Cloud.
-                isJiraCloud = False
-                if jira_url.find('atlassian.net') > 0:
-                    isJiraCloud = True
+                # Check if the jira session is valid, if not retry authentication
+                # This appears to be an issue with the Cloud Jira / Python library
+                for attempt in range(3):
+                    try:
+                        jira.session()
+                        break
+                    except Exception as error:
+                        print('Authentication failed, retrying in 10s.')
+                        time.sleep(10)
+                        jira = JIRA(options=options, basic_auth=(jirabot_user, jirabot_pass))
 
-                if isJiraCloud:
-                    res = jira.search_users(query=prAuthor)
-                    if res and len(res) > 0:
-                        jiraUser = res[0]
-                else:
-                    jiraUser = jira.user(prAuthor)
+                userSearchResults = jira.search_users(query=prAuthor)
+                if userSearchResults and len(userSearchResults) > 0:
+                    jiraUser = userSearchResults[0]
 
                 jiraUserEmail = None
                 if jiraUser is None:
