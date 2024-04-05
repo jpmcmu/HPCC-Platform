@@ -17,24 +17,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Setup JDK 11
-      uses: actions/setup-java@v1
-      with:
-        java-version: 11
-
-    - name: Setup Pytjon 3.8
-      uses: "actions/setup-python@v5"
-      with:
-        python-version: "3.8"
-
-    - name: "Install Python dependencies"
-      shell: bash
-      run: |
-        set -xe
-        python -VV
-        python -m site
-        python -m pip install --upgrade pip setuptools wheel
-
     - name: Checkout HPCC4j
       uses: actions/checkout@v3
       with:
@@ -47,7 +29,7 @@ runs:
       run: |
         cd ./HPCC4j
         mvn -B --activate-profiles jenkins-on-demand -Dmaven.gpg.skip=true \
-              -Dmaven.javadoc.skip=true -Dmaven.test.failure.ignore=false -Dhpccconn=https://eclwatch.default:8010 \
+              -Dmaven.javadoc.skip=true -Dmaven.test.failure.ignore=true -Dhpccconn=https://eclwatch.default:8010 \
               -Dwssqlconn=https://sql2ecl.default:8510 -DHPCC30117=open -pl '!dfsclient' install
 
     - name: Process errors
@@ -64,7 +46,10 @@ runs:
         import json
 
         branch_name = os.getenv('branch_name')
+        comments_url = os.getenv('comments_url')
+        github_token  = os.getenv('github_token')
         repository = os.getenv('repository')
+        print("Checking for test failures")
 
         file_path = "./HPCC4j/wsclient/FailedTests.csv"
         if os.path.exists(file_path):
@@ -74,13 +59,14 @@ runs:
             for row in csv_reader:
               # Each row in the CSV file is a failed test with: TestClass,Test,Error
               testFailureMessages += textwrap.dedent(f"""\
-              - ## {row[0]}.{row[1]} Failed
+              ## {row[0]}.{row[1]} Failed
               **Error:** ```{row[2]}```
               **Test Command:** ```mvn -B -Dhpccconn=https://eclwatch.default:8010 -Dtest={row[0]}#{row[1]} test```
               """)
 
             if testFailureMessages:
               message = textwrap.dedent(f"""\
+
               # ESP Regression Suite Test Failures:
               The following tests failed; checkout a copy of the HPCC4j project with the following command and run the individual test commands below to debug the failures.
               ```
@@ -94,6 +80,8 @@ runs:
               message = json.dumps(message)
               curlCommand = 'curl -X POST %s -H "Content-Type: application/json" -H "Authorization: token %s" --data \'{ "body": %s }\'' % ( comments_url, github_token, message)
               os.system(curlCommand)
+
+              sys.exit(1)
         else:
           print(f"FailedTests.csv does not exist at {file_path}")
 
