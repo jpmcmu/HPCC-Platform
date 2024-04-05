@@ -17,24 +17,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Check K8s
-      shell: bash
-      run: |
-        kubectl get svc
-
-    - name: Setup Python 3.8
-      uses: "actions/setup-python@v5"
-      with:
-        python-version: "3.8"
-
-    - name: "Install Python dependencies"
-      shell: bash
-      run: |
-        set -xe
-        python -VV
-        python -m site
-        python -m pip install --upgrade pip setuptools wheel
-
     - name: Checkout HPCC4j
       uses: actions/checkout@v3
       with:
@@ -84,6 +66,7 @@ runs:
 
             if testFailureMessages:
               message = textwrap.dedent(f"""\
+
               # ESP Regression Suite Test Failures:
               The following tests failed; checkout a copy of the HPCC4j project with the following command and run the individual test commands below to debug the failures.
               ```
