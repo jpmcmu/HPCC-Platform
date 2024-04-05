@@ -69,6 +69,8 @@ runs:
         import json
 
         branch_name = os.getenv('branch_name')
+        comments_url = os.getenv('comments_url')
+        github_token  = os.getenv('github_token')
         repository = os.getenv('repository')
         print("Checking for test failures")
 
