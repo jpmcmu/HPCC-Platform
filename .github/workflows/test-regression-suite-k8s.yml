@@ -44,7 +44,8 @@ jobs:
           platform-folder: ./HPCC-Platform
       - name: Run ESP Regression Suite
         with:
-          branch-name: ${{ github.base_ref }}
+          repository: jpmcmu/HPCC-JAPIs
+          branch-name: BrokenTests
           comments-url: ${{ github.event.pull_request.comments_url }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
         uses: ./HPCC-Platform/.github/actions/hpcc4j-esp-regression-suite
