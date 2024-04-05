@@ -59,7 +59,7 @@ runs:
             for row in csv_reader:
               # Each row in the CSV file is a failed test with: TestClass,Test,Error
               testFailureMessages += textwrap.dedent(f"""\
-              - ## {row[0]}.{row[1]} Failed
+              ## {row[0]}.{row[1]} Failed
               **Error:** ```{row[2]}```
               **Test Command:** ```mvn -B -Dhpccconn=https://eclwatch.default:8010 -Dtest={row[0]}#{row[1]} test```
               """)
