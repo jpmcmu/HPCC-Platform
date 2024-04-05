@@ -65,6 +65,7 @@ runs:
 
         branch_name = os.getenv('branch_name')
         repository = os.getenv('repository')
+        print("Checking for test failures")
 
         file_path = "./HPCC4j/wsclient/FailedTests.csv"
         if os.path.exists(file_path):
