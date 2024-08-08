@@ -120,6 +120,8 @@ jobs:
             github_token = os.environ['GITHUB_TOKEN']
             comments_url = os.environ['COMMENTS_URL']
 
+            print('Test')
+
             result = ''
             issuem = re.search("(HPCC|HH|IDE|EPE|ML|HPCC4J|JAPI)-[0-9]+", title)
             if issuem:
