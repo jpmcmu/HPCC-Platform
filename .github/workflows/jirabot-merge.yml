@@ -261,6 +261,8 @@ jobs:
 
             project_list_regex = '|'.join(project_prefixes)
 
+            print('Test')
+
             result = ''
             issuem = re.search("(" + project_list_regex + ")-[0-9]+", title, re.IGNORECASE)
             if issuem:
