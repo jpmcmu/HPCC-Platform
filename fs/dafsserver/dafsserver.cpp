@@ -39,6 +39,7 @@
 #include "jlzw.hpp"
 #include "jset.hpp"
 #include "jhtree.hpp"
+#include "jtrace.hpp"
 
 #include "dadfs.hpp"
 
@@ -839,6 +840,9 @@ class CRemoteRequest : public CSimpleInterfaceOf<IInterface>
     MemoryBuffer expandMb;
     Owned<IXmlWriterExt> responseWriter; // for xml or json response
 
+    OwnedSpanScope requestSpan;
+    std::string requestTraceParent;
+
     bool handleFull(MemoryBuffer &inMb, size32_t inPos, MemoryBuffer &compressMb, ICompressor *compressor, size32_t replyLimit, size32_t &totalSz)
     {
         size32_t sz = inMb.length()-inPos;
@@ -1099,6 +1103,27 @@ public:
 
     void process(IPropertyTree *requestTree, MemoryBuffer &restMb, MemoryBuffer &responseMb, CClientStats &stats)
     {
+        char* traceParent = "";
+        if (requestTree->hasProp("_trace/traceparent"))
+        {
+            traceParent = requestTree->queryProp("_trace/traceparent")
+        }
+
+        if (requestTraceParent != traceParent)
+        {
+            if (requestSpan != nullptr)
+            {
+                requestSpan->setSpanStatusSuccess(true);
+                requestSpan->endSpan();
+            }
+
+            Owned<IProperties> traceHeaders = createProperties();
+            traceHeaders->setProp("traceparent", traceParent);
+
+            requestSpan = queryTraceManager().createServerSpan("RemoteClientRequest", traceHeaders);
+            requestTraceParent = traceParent;
+        }
+
         if (requestTree->hasProp("replyLimit"))
             replyLimit = requestTree->getPropInt64("replyLimit", defaultDaFSReplyLimitKB) * 1024;
 
@@ -3011,12 +3036,12 @@ class CRemoteFileServer : implements IRemoteFileServer, public CInterface
                         else
                         {
                             if (gc)
-                                THROWJSOCKEXCEPTION(JSOCKERR_graceful_close);                            
+                                THROWJSOCKEXCEPTION(JSOCKERR_graceful_close);
                             break; // wait for rest via subsequent notifySelected's
                         }
                     }
                     else if (gc)
-                        THROWJSOCKEXCEPTION(JSOCKERR_graceful_close);                            
+                        THROWJSOCKEXCEPTION(JSOCKERR_graceful_close);
                     // to be here, implies handled full message, loop around to see if more on the wire.
                     // will break out if nothing/partial.
                 }
@@ -4802,7 +4827,7 @@ public:
          *   }
          *  }
          * }
-         * 
+         *
          * fetch continuation:
          * {
          *  "format" : "binary",

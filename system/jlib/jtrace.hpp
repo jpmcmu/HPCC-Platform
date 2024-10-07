@@ -22,7 +22,7 @@
 /**
  * @brief This follows open telemetry's span attribute naming conventions
  *  Known HPCC span Keys could be added here
- *  Specialized span keys can also be defined within the scope of a span 
+ *  Specialized span keys can also be defined within the scope of a span
  */
 static constexpr const char *kGlobalIdHttpHeaderName = "Global-Id";
 static constexpr const char *kCallerIdHttpHeaderName = "Caller-Id";
@@ -61,9 +61,9 @@ static constexpr int UNKNOWN_ERROR_CODE = -1;
 struct SpanError
 /**
  * @brief Represents an error that occurred during a span.
- * 
+ *
  * Used to store information about an error that occurred during the execution of a span.
- * It includes the error message, error code, 
+ * It includes the error message, error code,
  * and flags indicating whether the span failed and whether the exception escaped the span's scope.
  */
 {
@@ -90,7 +90,7 @@ struct SpanError
      * @param _spanFailed Flag indicating whether the span failed.
      * @param _escapeScope Flag indicating whether the exception escaped the scope of the span.
      */
-    SpanError(const char * _errorMessage, int _errorCode, bool _spanFailed, bool _escapeScope) 
+    SpanError(const char * _errorMessage, int _errorCode, bool _spanFailed, bool _escapeScope)
      : errorMessage(_errorMessage), errorCode(_errorCode), spanFailed(_spanFailed), escapeScope(_escapeScope) {}
 
     /**
@@ -145,6 +145,8 @@ public:
 
     inline ISpan * operator -> () const         { return span; }
     inline operator ISpan *() const             { return span; }
+    inline operator==(ISpan * _ptr) const       { return span == _ptr; }
+    inline operator!=(ISpan * _ptr) const       { return span != _ptr; }
 
     void clear();
     ISpan * query() const { return span; }
@@ -256,7 +258,7 @@ protected:
 
 /*
   To use feature-level tracing flags, protect the tracing with a test such as:
-  
+
   if (doTrace(flagName [, detailLevel])
       CTXLOG("tracing regarding the specified feature...");
 
@@ -358,16 +360,16 @@ constexpr TraceFlags traceAcknowledge = TraceFlags::flag30;
 //Specific to the code generator
 // see traceOptimizations above.
 
-//========================================================================================= 
+//=========================================================================================
 
 struct TraceOption { const char * name; TraceFlags value; };
 
 #define TRACEOPT(NAME) { # NAME, NAME }
 
-//========================================================================================= 
+//=========================================================================================
 
 constexpr std::initializer_list<TraceOption> roxieTraceOptions
-{ 
+{
     TRACEOPT(traceNone),
     TRACEOPT(traceStandard),
     TRACEOPT(traceDetailed),
@@ -380,8 +382,8 @@ constexpr std::initializer_list<TraceOption> roxieTraceOptions
     TRACEOPT(traceFilters),
     TRACEOPT(traceKafka),
     TRACEOPT(traceJava),
-    TRACEOPT(traceRoxieLock), 
-    TRACEOPT(traceQueryHashes), 
+    TRACEOPT(traceRoxieLock),
+    TRACEOPT(traceQueryHashes),
     TRACEOPT(traceSubscriptions),
     TRACEOPT(traceRoxieFiles),
     TRACEOPT(traceRoxieActiveQueries),
