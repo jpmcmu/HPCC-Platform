@@ -976,6 +976,11 @@ public:
         localParentSpan->toString(out, false);
         out.append(" }");
     };
+    
+    virtual ISpan * getParentSpan()
+    {
+        return localParentSpan;
+    } 
 
 protected:
     CSpan * localParentSpan = nullptr;
@@ -1430,6 +1435,8 @@ void CTraceManager::initTracer(const IPropertyTree * traceConfig)
         using namespace opentelemetry::trace;
         if (disableTracing)
         {
+            PROGLOG("Init tracing with noop provider");
+            
             //Set noop global trace provider
             static nostd::shared_ptr<TracerProvider> noopProvider(new NoopTracerProvider);
             opentelemetry::trace::Provider::SetTracerProvider(noopProvider);
@@ -1437,6 +1444,11 @@ void CTraceManager::initTracer(const IPropertyTree * traceConfig)
         }
         else
         {
+            // StringBuffer xml;
+            // toXML(traceConfig, xml);
+            // PROGLOG("Init tracing: %s", xml.str());
+            PROGLOG("Init tracing with tracing config");
+
             initTracerProviderAndGlobalInternals(traceConfig);
         }
 
@@ -1509,7 +1521,7 @@ ISpan * CTraceManager::createServerSpan(const char * name, const IProperties * h
 OwnedSpanScope::OwnedSpanScope(ISpan * _ptr) : span(_ptr)
 {
     if (_ptr)
-        prevSpan = setThreadedActiveSpan(_ptr);
+        setThreadedActiveSpan(_ptr);
 }
 
 void OwnedSpanScope::setown(ISpan * _span)
@@ -1518,7 +1530,7 @@ void OwnedSpanScope::setown(ISpan * _span)
     //Just in case the span is already set, ensure it is ended and that the previous span is restored.
     clear();
     span.setown(_span);
-    prevSpan = setThreadedActiveSpan(_span);
+    setThreadedActiveSpan(_span);
 }
 
 void OwnedSpanScope::set(ISpan * _span)
@@ -1530,8 +1542,9 @@ void OwnedSpanScope::clear()
 {
     if (span)
     {
+        PROGLOG("Ending span: %s,%s", span->queryTraceId(), span->querySpanId());
         span->endSpan();
-        setThreadedActiveSpan(prevSpan);
+        setThreadedActiveSpan(span->getParentSpan());
         span.clear();
     }
 }

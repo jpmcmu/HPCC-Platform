@@ -9057,6 +9057,10 @@ jlib_decl IPropertyTree * loadConfiguration(IPropertyTree *componentDefault, con
     componentConfiguration.setown(std::get<1>(result));
     globalConfiguration.setown(std::get<2>(result));
 
+    StringBuffer globalConfigXml;
+    toXML(globalConfiguration, globalConfigXml);
+    DBGLOG("Global Config: %s", globalConfigXml.str());
+
     /* In k8s, pods auto-restart by default on monitored ConfigMap settings/areas
      * ConfigMap settings/areas deliberately not monitored will rely on this config updater mechanism,
      * and if necessary, installed hooks that are called on an update, to perform updates of cached state.

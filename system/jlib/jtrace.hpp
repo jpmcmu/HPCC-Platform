@@ -127,6 +127,8 @@ interface ISpan : extends IInterface
     virtual const char * queryTraceId() const = 0;
     virtual const char * querySpanId() const = 0;
 
+    virtual ISpan * getParentSpan() { return nullptr; }
+
     virtual ISpan * createClientSpan(const char * name) = 0;
     virtual ISpan * createInternalSpan(const char * name) = 0;
 
@@ -141,12 +143,18 @@ class jlib_decl OwnedSpanScope
 public:
     OwnedSpanScope() = default;
     OwnedSpanScope(ISpan * _ptr);
+    OwnedSpanScope(const OwnedSpanScope& rhs) = delete;
+    OwnedSpanScope(OwnedSpanScope&& rhs) = default;
     ~OwnedSpanScope();
 
     inline ISpan * operator -> () const         { return span; }
     inline operator ISpan *() const             { return span; }
-    inline operator==(ISpan * _ptr) const       { return span == _ptr; }
-    inline operator!=(ISpan * _ptr) const       { return span != _ptr; }
+
+    inline OwnedSpanScope& operator=(ISpan * ptr) { set(ptr); return *this; }
+    inline OwnedSpanScope& operator=(const OwnedSpanScope& rhs) = delete;
+
+    inline bool operator == (ISpan * _ptr) const       { return span == _ptr; }
+    inline bool operator != (ISpan * _ptr) const       { return span != _ptr; }
 
     void clear();
     ISpan * query() const { return span; }
@@ -155,7 +163,6 @@ public:
 
 private:
     Owned<ISpan> span;
-    ISpan * prevSpan = nullptr;
 };
 
 extern jlib_decl IProperties * getClientHeaders(const ISpan * span);

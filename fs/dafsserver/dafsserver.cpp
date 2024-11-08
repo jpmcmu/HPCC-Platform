@@ -1096,6 +1096,12 @@ public:
             responseWriter->outputUInt(cursorHandle, sizeof(cursorHandle), "handle");
         }
     }
+
+    ~CRemoteRequest()
+    {
+        PROGLOG("Destroying cRemoteRequest with span");
+    }
+
     OutputFormat queryFormat() const { return format; }
     unsigned __int64 queryReplyLimit() const { return replyLimit; }
     IRemoteActivity *queryActivity() const { return activity; }
@@ -1103,25 +1109,26 @@ public:
 
     void process(IPropertyTree *requestTree, MemoryBuffer &restMb, MemoryBuffer &responseMb, CClientStats &stats)
     {
-        char* traceParent = "";
-        if (requestTree->hasProp("_trace/traceparent"))
+        const char* traceParent = requestTree->queryProp("_trace/traceparent");
+        if (traceParent != nullptr && requestTraceParent != traceParent)
         {
-            traceParent = requestTree->queryProp("_trace/traceparent")
-        }
-
-        if (requestTraceParent != traceParent)
-        {
+            // Check to see if we have an existing span that needs to be closed out, this can happen
+            // when the span parent changes on the client side
             if (requestSpan != nullptr)
             {
                 requestSpan->setSpanStatusSuccess(true);
                 requestSpan->endSpan();
+                PROGLOG("New span for: %s", traceParent);
             }
 
             Owned<IProperties> traceHeaders = createProperties();
             traceHeaders->setProp("traceparent", traceParent);
 
-            requestSpan = queryTraceManager().createServerSpan("RemoteClientRequest", traceHeaders);
+            PROGLOG("Creating server span for: %s", traceParent);
+            requestSpan = queryTraceManager().createServerSpan("ReadRequest", traceHeaders);
             requestTraceParent = traceParent;
+            
+            requestSpan->setSpanAttribute("test.attribute", "test");
         }
 
         if (requestTree->hasProp("replyLimit"))
@@ -4999,6 +5006,17 @@ public:
         {
             case StreamCmd::VERSION:
             {
+                OwnedSpanScope versionSpan;
+                const char* traceParent = requestTree->queryProp("_trace/traceparent");
+                if (traceParent != nullptr)
+                {
+                    PROGLOG("Creating version span");
+                    Owned<IProperties> traceHeaders = createProperties();
+                    traceHeaders->setProp("traceparent", traceParent);
+
+                    versionSpan = queryTraceManager().createServerSpan("VersionRequest", traceHeaders);
+                }
+
                 if (outFmt_Binary == outputFormat)
                     reply.append(DAFILESRV_VERSIONSTRING);
                 else
