@@ -163,6 +163,45 @@ static ISecureSocket *createSecureSocket(ISocket *sock, bool disableClientCertVe
 }
 #endif
 
+class ActiveSpanScope
+{
+public:
+    // Captures current threadActiveSpan for prevSpan
+    ActiveSpanScope(ISpan * _ptr) : ActiveSpanScope(_ptr, queryThreadedActiveSpan()) {}
+    ActiveSpanScope(ISpan * _ptr, ISpan * _prev) : span(_ptr), prevSpan(_prev)
+    {
+        setThreadedActiveSpan(_ptr);
+    }
+    ActiveSpanScope(const ActiveSpanScope& rhs) = delete;
+
+    ~ActiveSpanScope()
+    {
+        ISpan* current = queryThreadedActiveSpan();
+        if (current != span.get())
+        {
+            const char* currSpanID = current != nullptr ? current->querySpanId() : "null";
+            const char* expectedSpanID = span != nullptr ? span->querySpanId() : "null";
+
+            IERRLOG("~ActiveSpanScope: threadActiveSpan has changed unexpectedly, expected: %s actual: %s", expectedSpanID, currSpanID);
+            return;
+        }
+
+        setThreadedActiveSpan(prevSpan);
+    }
+
+    inline ISpan * operator -> () const         { return span; }
+    inline operator ISpan *() const             { return span; }
+
+    inline ActiveSpanScope& operator=(ISpan * ptr) = delete;
+    inline ActiveSpanScope& operator=(const ActiveSpanScope& rhs) = delete;
+
+    inline bool operator == (ISpan * _ptr) const       { return span == _ptr; }
+    inline bool operator != (ISpan * _ptr) const       { return span != _ptr; }
+private:
+    Owned<ISpan> span;
+    ISpan * prevSpan = nullptr;
+};
+
 static void reportFailedSecureAccepts(const char *context, IException *exception, unsigned &numFailedConn, unsigned &timeLastLog)
 {
     numFailedConn++;
@@ -840,7 +879,7 @@ class CRemoteRequest : public CSimpleInterfaceOf<IInterface>
     MemoryBuffer expandMb;
     Owned<IXmlWriterExt> responseWriter; // for xml or json response
 
-    OwnedSpanScope requestSpan;
+    Owned<ISpan> requestSpan;
     std::string requestTraceParent;
 
     bool handleFull(MemoryBuffer &inMb, size32_t inPos, MemoryBuffer &compressMb, ICompressor *compressor, size32_t replyLimit, size32_t &totalSz)
@@ -1118,18 +1157,18 @@ public:
             {
                 requestSpan->setSpanStatusSuccess(true);
                 requestSpan->endSpan();
-                PROGLOG("New span for: %s", traceParent);
             }
 
             Owned<IProperties> traceHeaders = createProperties();
             traceHeaders->setProp("traceparent", traceParent);
 
-            PROGLOG("Creating server span for: %s", traceParent);
-            requestSpan = queryTraceManager().createServerSpan("ReadRequest", traceHeaders);
+            requestSpan.set(queryTraceManager().createServerSpan("ReadRequest", traceHeaders));
             requestTraceParent = traceParent;
-            
-            requestSpan->setSpanAttribute("test.attribute", "test");
+
+            setCheckedSpan(requestSpan->querySpanId());
         }
+
+        ActiveSpanScope activeSpan(requestSpan.get());
 
         if (requestTree->hasProp("replyLimit"))
             replyLimit = requestTree->getPropInt64("replyLimit", defaultDaFSReplyLimitKB) * 1024;
@@ -4976,8 +5015,23 @@ public:
             }
             case StreamCmd::CLOSE:
             {
+                // OwnedSpanScope closeSpan;
+                // const char* traceParent = requestTree->queryProp("_trace/traceparent");
+                // if (traceParent != nullptr)
+                // {
+                //     Owned<IProperties> traceHeaders = createProperties();
+                //     traceHeaders->setProp("traceparent", traceParent);
+
+                //     closeSpan.set(queryTraceManager().createServerSpan("VersionRequest", traceHeaders));
+                // }
+
                 if (0 == cursorHandle)
-                    throw createDafsException(DAFSERR_cmdstream_protocol_failure, "cursor handle not supplied to 'close' command");
+                {
+                    IException* exception = createDafsException(DAFSERR_cmdstream_protocol_failure, "cursor handle not supplied to 'close' command");
+                    // closeSpan->recordException(exception);
+                    throw exception;
+                }
+
                 IFileIO *dummy;
                 checkFileIOHandle(cursorHandle, dummy, true);
                 break;
@@ -5006,16 +5060,15 @@ public:
         {
             case StreamCmd::VERSION:
             {
-                OwnedSpanScope versionSpan;
-                const char* traceParent = requestTree->queryProp("_trace/traceparent");
-                if (traceParent != nullptr)
-                {
-                    PROGLOG("Creating version span");
-                    Owned<IProperties> traceHeaders = createProperties();
-                    traceHeaders->setProp("traceparent", traceParent);
+                // OwnedSpanScope versionSpan;
+                // const char* traceParent = requestTree->queryProp("_trace/traceparent");
+                // if (traceParent != nullptr)
+                // {
+                //     Owned<IProperties> traceHeaders = createProperties();
+                //     traceHeaders->setProp("traceparent", traceParent);
 
-                    versionSpan = queryTraceManager().createServerSpan("VersionRequest", traceHeaders);
-                }
+                //     versionSpan = queryTraceManager().createServerSpan("VersionRequest", traceHeaders);
+                // }
 
                 if (outFmt_Binary == outputFormat)
                     reply.append(DAFILESRV_VERSIONSTRING);

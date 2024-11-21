@@ -365,19 +365,31 @@ dafilesrv:
   logging:
     detail: 100
 )!!";
-/*
-tracing:
-    enableDefaultLogExporter: true
-    exporters:
-    - type: OTLP-HTTP
-      endpoint: "http://192.168.4.24:4318/v1/traces"
-      useSslCredentials: false
-      batch:
-        enabled: true
-        maxQueueSize: 4096
-        scheduledDelayMillis: 6000
-        maxExportBatchSize: 512
-*/
+
+//------------------------------------------------------------------------------
+// ActiveSpanScope Design Notes:
+//------------------------------------------------------------------------------
+// ActiveSpanScope updates the threadActiveSpan when it is intstantiated
+// and restores it to a user configurable previous ISpan when it leaves scope.
+// ActiveSpanScope does not control its referenced ISpan's lifetime or ending.
+//
+// This design allows ActiveSpanScope to be used to update threadActiveSpan
+// for long running ISpans that are time sliced, worked on from multiple threads,
+// and / or passed between threads. In these cases multiple ActiveSpanScopes
+// will be created over the lifetime of the referenced of the ISpan to represent
+// a slice of work done towards that ISpan.
+//
+// Allowing the previous / restored ISpan to be configured allows for
+// "disconnected" work on ISpans to be done. Where the previously active ISpan
+// may not be the correct ISpan to restore when an ActiveSpanScope leaves scope.
+//
+// When an ActiveSpanScope is destroyed it will return the prevSpan to active,
+// if and only if its span is still the threadActiveSpan. If this is not this
+// implies that there is a conflicting ActiveSpanScope and that a code structure
+// issue exists that needs to be addressed. A IERRLOG message will be added
+// in debug builds for these cases.
+//------------------------------------------------------------------------------
+
 
 jlib_decl IPropertyTree * dafilesrvLoadConfiguration(const char * defaultYaml, Owned<IPropertyTree>& globalConfig, const char * * argv, const char * componentTag, const char * envPrefix)
 {
