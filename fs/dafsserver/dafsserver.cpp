@@ -177,7 +177,7 @@ public:
     ~ActiveSpanScope()
     {
         ISpan* current = queryThreadedActiveSpan();
-        if (current != span.get())
+        if (current != span)
         {
             const char* currSpanID = current != nullptr ? current->querySpanId() : "null";
             const char* expectedSpanID = span != nullptr ? span->querySpanId() : "null";
@@ -198,7 +198,7 @@ public:
     inline bool operator == (ISpan * _ptr) const       { return span == _ptr; }
     inline bool operator != (ISpan * _ptr) const       { return span != _ptr; }
 private:
-    Owned<ISpan> span;
+    ISpan * span = nullptr;
     ISpan * prevSpan = nullptr;
 };
 
@@ -1138,7 +1138,11 @@ public:
 
     ~CRemoteRequest()
     {
-        PROGLOG("Destroying cRemoteRequest with span");
+        if (requestSpan != nullptr)
+        {
+            requestSpan->setSpanStatusSuccess(true);
+            requestSpan->endSpan();
+        }
     }
 
     OutputFormat queryFormat() const { return format; }
@@ -1148,8 +1152,13 @@ public:
 
     void process(IPropertyTree *requestTree, MemoryBuffer &restMb, MemoryBuffer &responseMb, CClientStats &stats)
     {
-        const char* traceParent = requestTree->queryProp("_trace/traceparent");
-        if (traceParent != nullptr && requestTraceParent != traceParent)
+        const char* fullTraceContext = requestTree->queryProp("_trace/traceparent");
+
+        // We only want to compare the trace-id & span-id, so remove the last "sampling" group
+        std::string traceParent = fullTraceContext ? fullTraceContext : "";
+        traceParent = traceParent.substr(0,traceParent.find_last_of("-"));
+
+        if (!traceParent.empty() && requestTraceParent != traceParent)
         {
             // Check to see if we have an existing span that needs to be closed out, this can happen
             // when the span parent changes on the client side
@@ -1160,12 +1169,16 @@ public:
             }
 
             Owned<IProperties> traceHeaders = createProperties();
-            traceHeaders->setProp("traceparent", traceParent);
+            traceHeaders->setProp("traceparent", fullTraceContext);
 
-            requestSpan.set(queryTraceManager().createServerSpan("ReadRequest", traceHeaders));
+            std::string requestSpanName;
+            if (activity->queryIsReadActivity())
+                requestSpanName = "ReadRequest";
+            else
+                requestSpanName = "WriteRequest";
+
+            requestSpan.set(queryTraceManager().createServerSpan(requestSpanName.c_str(), traceHeaders));
             requestTraceParent = traceParent;
-
-            setCheckedSpan(requestSpan->querySpanId());
         }
 
         ActiveSpanScope activeSpan(requestSpan.get());
@@ -5015,20 +5028,20 @@ public:
             }
             case StreamCmd::CLOSE:
             {
-                // OwnedSpanScope closeSpan;
-                // const char* traceParent = requestTree->queryProp("_trace/traceparent");
-                // if (traceParent != nullptr)
-                // {
-                //     Owned<IProperties> traceHeaders = createProperties();
-                //     traceHeaders->setProp("traceparent", traceParent);
+                OwnedSpanScope closeSpan;
+                const char* traceParent = requestTree->queryProp("_trace/traceparent");
+                if (traceParent != nullptr)
+                {
+                    Owned<IProperties> traceHeaders = createProperties();
+                    traceHeaders->setProp("traceparent", traceParent);
 
-                //     closeSpan.set(queryTraceManager().createServerSpan("VersionRequest", traceHeaders));
-                // }
+                    closeSpan.set(queryTraceManager().createServerSpan("CloseRequest", traceHeaders));
+                }
 
                 if (0 == cursorHandle)
                 {
                     IException* exception = createDafsException(DAFSERR_cmdstream_protocol_failure, "cursor handle not supplied to 'close' command");
-                    // closeSpan->recordException(exception);
+                    closeSpan->recordException(exception);
                     throw exception;
                 }
 
@@ -5060,15 +5073,15 @@ public:
         {
             case StreamCmd::VERSION:
             {
-                // OwnedSpanScope versionSpan;
-                // const char* traceParent = requestTree->queryProp("_trace/traceparent");
-                // if (traceParent != nullptr)
-                // {
-                //     Owned<IProperties> traceHeaders = createProperties();
-                //     traceHeaders->setProp("traceparent", traceParent);
+                OwnedSpanScope versionSpan;
+                const char* traceParent = requestTree->queryProp("_trace/traceparent");
+                if (traceParent != nullptr)
+                {
+                    Owned<IProperties> traceHeaders = createProperties();
+                    traceHeaders->setProp("traceparent", traceParent);
 
-                //     versionSpan = queryTraceManager().createServerSpan("VersionRequest", traceHeaders);
-                // }
+                    versionSpan = queryTraceManager().createServerSpan("VersionRequest", traceHeaders);
+                }
 
                 if (outFmt_Binary == outputFormat)
                     reply.append(DAFILESRV_VERSIONSTRING);

@@ -192,7 +192,7 @@ public:
             for (auto &recordable : recordables)
             {
                 //Casting the recordable object to the type of the object that was previously created by
-                //JLogSpanExporter::MakeRecordable() - 
+                //JLogSpanExporter::MakeRecordable() -
                 auto span = std::unique_ptr<opentelemetry::sdk::trace::SpanData>(
                 static_cast<opentelemetry::sdk::trace::SpanData *>(recordable.release()));
 
@@ -478,7 +478,7 @@ public:
 
     virtual void Set(opentelemetry::nostd::string_view key, opentelemetry::nostd::string_view value) noexcept override
     {
-        httpHeaders->setProp(std::string(key).c_str(), std::string(value).c_str());        
+        httpHeaders->setProp(std::string(key).c_str(), std::string(value).c_str());
     }
 
 private:
@@ -541,6 +541,12 @@ static inline CTraceManager & queryInternalTraceManager() { return *theTraceMana
 
 //---------------------------------------------------------------------------------------------------------------------
 
+std::string checkedSpanId = "";
+void setCheckedSpan(const char* spanId)
+{
+    checkedSpanId = spanId;
+}
+
 class CSpan : public CInterfaceOf<ISpan>
 {
 public:
@@ -548,6 +554,10 @@ public:
 
     virtual void beforeDispose() override
     {
+        if (checkedSpanId == querySpanId()) {
+            PROGLOG("Test");
+        }
+
         //Record the span as complete before we output the logging for the end of the span
         endSpan();
     }
@@ -610,7 +620,7 @@ public:
             span->SetAttribute(name, (int64_t)value); // (uint64_t) would be even better but comments in attribute_value.h indicate that it is not supported by the standard.
     }
 
-    void addSpanEvent(const char * eventName, IProperties * attributes) override 
+    void addSpanEvent(const char * eventName, IProperties * attributes) override
     {
         if (span && !isEmptyString(eventName))
         {
@@ -655,7 +665,7 @@ public:
 
     /**
      * Retrieves the Span's client headers traceparent and tracestate
-     * Output follows OpenTelemetry Span context format for propogation 
+     * Output follows OpenTelemetry Span context format for propogation
      * accross process boundaries.
      *
      * @param clientHeaders IProperties container for client headers.
@@ -697,7 +707,7 @@ public:
 
     /**
      * Retrieves the Span's context as key/value pairs into the provided IProperties.
-     * Optionally, output follows OpenTelemetry Span context format for propogation 
+     * Optionally, output follows OpenTelemetry Span context format for propogation
      * accross process boundaries.
      *
      * @param ctxProps IProperties container for span context key/value pairs.
@@ -793,7 +803,7 @@ public:
 
     virtual const char * queryTraceId() const override
     {
-        return traceID.get(); 
+        return traceID.get();
     }
 
     virtual const char * querySpanId() const override
@@ -848,7 +858,7 @@ protected:
             return;
 
         char trace_id[32] = {0};
-        
+
         spanCtx.trace_id().ToLowerBase16(trace_id);
         traceID.set(trace_id, 32);
     }
@@ -976,11 +986,11 @@ public:
         localParentSpan->toString(out, false);
         out.append(" }");
     };
-    
+
     virtual ISpan * getParentSpan()
     {
         return localParentSpan;
-    } 
+    }
 
 protected:
     CSpan * localParentSpan = nullptr;
@@ -1366,7 +1376,7 @@ void CTraceManager::initTracerProviderAndGlobalInternals(const IPropertyTree * t
         processors.push_back(opentelemetry::sdk::trace::SimpleSpanProcessorFactory::Create(std::move(exporter)));
     }
 
-    opentelemetry::sdk::resource::ResourceAttributes resourceAtts = 
+    opentelemetry::sdk::resource::ResourceAttributes resourceAtts =
         {
             {"service.name", moduleName.get()},
             {"service.version", hpccBuildInfo.buildVersion}
@@ -1436,7 +1446,7 @@ void CTraceManager::initTracer(const IPropertyTree * traceConfig)
         if (disableTracing)
         {
             PROGLOG("Init tracing with noop provider");
-            
+
             //Set noop global trace provider
             static nostd::shared_ptr<TracerProvider> noopProvider(new NoopTracerProvider);
             opentelemetry::trace::Provider::SetTracerProvider(noopProvider);

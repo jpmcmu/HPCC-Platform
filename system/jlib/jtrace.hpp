@@ -108,6 +108,8 @@ struct SpanError
     void setError(const char * _errorMessage, int _errorCode) { errorMessage = _errorMessage; errorCode = _errorCode; }
 };
 
+void setCheckedSpan(const char* spanId);
+
 interface ISpan : extends IInterface
 {
     virtual void setSpanAttribute(const char * key, const char * val) = 0;
