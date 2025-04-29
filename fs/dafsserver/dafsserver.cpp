@@ -1098,6 +1098,15 @@ class CRemoteRequest : public CSimpleInterfaceOf<IInterface>
         writeActivity->write(rowDataSz, rowData);
     }
 
+    void closeRequestSpan()
+    {
+        if (requestSpan != nullptr)
+        {
+            requestSpan->setSpanAttribute("ProcessingTime", processingTimeNS);
+            requestSpan->setSpanStatusSuccess(true);
+        }
+    }
+
 public:
     CRemoteRequest(int _cursorHandle, OutputFormat _format, ICompressor *_compressor, IExpander *_expander, IRemoteActivity *_activity)
         : cursorHandle(_cursorHandle), format(_format), activity(_activity), compressor(_compressor), expander(_expander)
@@ -1114,10 +1123,7 @@ public:
 
     ~CRemoteRequest()
     {
-        if (requestSpan != nullptr)
-        {
-            requestSpan->setSpanStatusSuccess(true);
-        }
+        closeRequestSpan();
     }
 
     OutputFormat queryFormat() const { return format; }
@@ -1143,12 +1149,8 @@ public:
 
         if (traceParentChanged)
         {
-            // Check to see if we have an existing span that needs to be marked successful before close
-            if (requestSpan != nullptr)
-            {
-                requestSpan->setSpanAttribute("ProcessingTime", processingTimeNS);
-                requestSpan->setSpanStatusSuccess(true);
-            }
+            // Close existing span if we have one
+            closeRequestSpan(); 
 
             Owned<IProperties> traceHeaders = createProperties();
             traceHeaders->setProp("traceparent", fullTraceContext);
