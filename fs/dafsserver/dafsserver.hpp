@@ -61,6 +61,8 @@ interface IKeyManager;
 interface IDelayedFile;
 interface IDaFsConnection;
 
+extern DAFSSERVER_API IFileDescriptor *verifyMetaInfo(IPropertyTree &actNode, bool authorizedOnly, const IPropertyTree *keyPairInfo);
+
 extern DAFSSERVER_API const char *remoteServerVersionString();
 extern DAFSSERVER_API IRemoteFileServer * createRemoteFileServer(unsigned maxThreads=DEFAULT_THREADLIMIT, unsigned maxThreadsDelayMs=DEFAULT_THREADLIMITDELAYMS, unsigned maxAsyncCopy=DEFAULT_ASYNCCOPYMAX, IPropertyTree *keyPairInfo=nullptr);
 extern DAFSSERVER_API int setDaliServerTrace(byte flags);
