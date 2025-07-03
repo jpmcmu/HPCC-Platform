@@ -586,8 +586,7 @@ StringBuffer &encodeDFUFileMeta(StringBuffer &metaInfoBlob, IPropertyTree *metaI
     JBASE64_Encode(compressedMetaInfoMb.bytes(), compressedMetaInfoMb.length(), metaInfoBlob, false);
     PROGLOG("Base64 encoding meta info blob [%u]", metaInfoBlob.length());
 
-    std::string compressedMetaInfo = std::string((const char *)metaInfoBlob.bytes(), metaInfoBlob.length());
-    PROGLOG("Base64 encoded blob:\n%s", compressedMetaInfo.c_str());
+    PROGLOG("Base64 encoded blob:\n%s", metaInfoBlob.str());
     return metaInfoBlob;
 }
 
