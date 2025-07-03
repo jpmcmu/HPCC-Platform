@@ -582,15 +582,12 @@ StringBuffer &encodeDFUFileMeta(StringBuffer &metaInfoBlob, IPropertyTree *metaI
     MemoryBuffer decompressedMetaInfoMb;
     fastLZDecompressToBuffer(decompressedMetaInfoMb, compressedMetaInfoMb);
 
-    std::string decompressedMetaInfo = std::string((const char *)decompressedMetaInfoMb.bytes(), decompressedMetaInfoMb.length());
-    PROGLOG("Decompressed meta info blob: %s", decompressedMetaInfo.c_str());
-
-    std::string compressedMetaInfo = std::string((const char *)compressedMetaInfoMb.bytes(), compressedMetaInfoMb.length());
-    PROGLOG("Compressed meta info blob: %s", compressedMetaInfo.c_str());
-
     PROGLOG("Compressing meta info blob [%u -> %u]", metaInfoMb.length(), compressedMetaInfoMb.length());
     JBASE64_Encode(compressedMetaInfoMb.bytes(), compressedMetaInfoMb.length(), metaInfoBlob, false);
     PROGLOG("Base64 encoding meta info blob [%u]", metaInfoBlob.length());
+
+    std::string compressedMetaInfo = std::string((const char *)metaInfoBlob.bytes(), metaInfoBlob.length());
+    PROGLOG("Base64 encoded blob:\n%s", compressedMetaInfo.c_str());
     return metaInfoBlob;
 }
 

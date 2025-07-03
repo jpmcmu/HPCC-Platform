@@ -2699,6 +2699,8 @@ IFileDescriptor *verifyMetaInfo(IPropertyTree &actNode, bool authorizedOnly, con
     if (0 == metaInfoB64.length())
         throw createDafsException(DAFSERR_cmdstream_protocol_failure, "createRemoteActivity: missing metaInfo");
 
+    PROGLOG("Verify meta info:\n%s", metaInfoB64.str());
+
     MemoryBuffer compressedMetaInfoMb;
     JBASE64_Decode(metaInfoB64.str(), compressedMetaInfoMb);
     MemoryBuffer decompressedMetaInfoMb;
