@@ -17,6 +17,8 @@
 
 // todo look at IRemoteFileServer stop
 
+#define _DEBUG 
+
 #include <vector>
 
 #include "platform.h"
