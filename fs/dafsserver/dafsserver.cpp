@@ -17,7 +17,7 @@
 
 // todo look at IRemoteFileServer stop
 
-#define _DEBUG 
+#define _DEBUG true
 
 #include <vector>
 
