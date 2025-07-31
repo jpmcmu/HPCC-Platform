@@ -2656,6 +2656,7 @@ public:
     }
 };
 
+/*
 class CRemoteIndexWriteHelper : public CThorIndexWriteArg
 {
     UnexpectedVirtualFieldCallback fieldCallback;
@@ -2723,12 +2724,13 @@ public:
     IOutputMetaData * outMeta = nullptr;
     unsigned flags = 0;
 };
+*/
 
 class CRemoteIndexWriteActivity : public CRemoteWriteBaseActivity, implements IBlobCreator
 {
     Owned<IFileIOStream> iFileIOStream;
     Owned<IKeyBuilder> builder;
-    Owned<CRemoteIndexWriteHelper> helper;
+    // Owned<CRemoteIndexWriteHelper> helper;
     Linked<IOutputMetaData> inMeta, outMeta;
     UnexpectedVirtualFieldCallback fieldCallback;
     OwnedMalloc<char> prevRowBuffer;
@@ -2736,19 +2738,24 @@ class CRemoteIndexWriteActivity : public CRemoteWriteBaseActivity, implements IB
 
     uint64_t uncompressedSize = 0;
     uint64_t processed = 0;
+    size32_t keyedSize = 0;
     size32_t maxDiskRecordSize = 0;
     size32_t maxRecordSizeSeen = 0; // used to store the maximum record size seen, for metadata
     bool isTlk = false;
     bool opened = false;
 
+    UnexpectedVirtualFieldCallback fieldCallback;
+    Owned<const IDynamicTransform> translator;
+    std::map<std::string, std::string> indexMetaData;
+
     inline void processRow(const void *row, uint64_t rowSize)
     {
         unsigned __int64 fpos = 0;
         RtlStaticRowBuilder rowBuilder(rowBuffer, maxDiskRecordSize);
-        size32_t indexRowSize = helper->transform(rowBuilder, row, this, fpos);
+        size32_t indexRowSize = translator->translate(rowBuilder, fieldCallback, (const byte *)row);
 
         // Key builder checks for duplicate records so we can just check for sortedness
-        if (memcmp(prevRowBuffer.get(), rowBuffer.get(), helper->getKeyedSize()) > 0)
+        if (memcmp(prevRowBuffer.get(), rowBuffer.get(), keyedSize) > 0)
         {
             throw createDafsExceptionV(DAFSERR_cmdstream_generalwritefailure, "CRemoteIndexWriteActivity: Incoming rows are not sorted.");
         }
@@ -2793,7 +2800,10 @@ public:
         outMeta.setown(getTypeInfoOutputMetaData(config, "output", false));
         if (!outMeta)
             throw createDafsException(DAFSERR_cmdstream_protocol_failure, "CRemoteIndexWriteActivity: output metadata missing");
-        
+       
+        const RtlRecord& recAccessor = outMeta->queryRecordAccessor(true);
+        keyedSize = recAccessor.getFixedOffset(recAccessor.getNumKeyedFields());           
+
         std::string compression = config.queryProp("compressed", "default");
         toLower(compression);
         trim(compression);
@@ -2824,43 +2834,29 @@ public:
         if (isVariable)
             flags |= HTREE_VARSIZE;
 
-        helper.setown(new CRemoteIndexWriteHelper(fileName.get(), compression.c_str(), inMeta, outMeta, flags));
+
+        const RtlRecord &inRecord = inMeta->queryRecordAccessor(true);
+        const RtlRecord &outRecord = outMeta->queryRecordAccessor(true);
+        translator.setown(createRecordTranslator(outRecord, inRecord));
 
         unsigned nodeSize = NODESIZE;
         if (config.hasProp("nodeSize"))
         {
             nodeSize = config.getPropInt("nodeSize");
-            helper->setIndexMeta("_nodeSize", std::to_string(nodeSize));
         }
 
-        if (config.hasProp("noSeek"))
-        {
-            bool noSeek = config.getPropBool("noSeek");
-            helper->setIndexMeta("_noSeek", noSeek ? "true" : "false");
-            if (noSeek)
-                flags |= TRAILING_HEADER_ONLY;
-        }
-        
-        if (config.hasProp("useTrailingHeader"))
-        {
-            bool useTrailingHeader = config.getPropBool("useTrailingHeader");
-            helper->setIndexMeta("_useTrailingHeader", useTrailingHeader ? "true" : "false");
-            if (useTrailingHeader)
-                flags |= USE_TRAILING_HEADER;
-            else
-                flags &= ~USE_TRAILING_HEADER; 
-        }
+        bool noSeek = config.getPropBool("noSeek", true);
+        if (noSeek)
+            flags |= TRAILING_HEADER_ONLY;
 
-        size32_t fileposSize = hasTrailingFileposition(helper->queryDiskRecordSize()->queryTypeInfo()) ? sizeof(offset_t) : 0;
+        bool hasTrailingFpos = hasTrailingFileposition(outMeta->queryTypeInfo());
+        size32_t fileposSize = hasTrailingFpos ? sizeof(offset_t) : 0;
         if (isVariable)
         {
-            if (helper->getFlags() & TIWmaxlength)
-                maxDiskRecordSize = helper->getMaxKeySize();
-            else
-                maxDiskRecordSize = KEYBUILD_MAXLENGTH; // Current default behaviour, could be improved in the future
+            maxDiskRecordSize = KEYBUILD_MAXLENGTH;
         }
         else
-            maxDiskRecordSize = helper->queryDiskRecordSize()->getFixedSize()-fileposSize;
+            maxDiskRecordSize = outMeta->getFixedSize()-fileposSize;
 
         if (maxDiskRecordSize > KEYBUILD_MAXLENGTH)
             throw MakeStringException(99, "Index maximum record length (%d) exceeds 32k internal limit", maxDiskRecordSize);
@@ -2869,19 +2865,20 @@ public:
         prevRowBuffer.allocateN(maxDiskRecordSize, true);
 
         openFileStream();
-        builder.setown(createKeyBuilder(iFileIOStream.get(), flags, maxDiskRecordSize, nodeSize, helper->getKeyedSize(), 0, helper.get(), compression.c_str(), true, false));
+        builder.setown(createKeyBuilder(iFileIOStream.get(), flags, maxDiskRecordSize, nodeSize, keyedSize, 0, nullptr, compression.c_str(), true, false));
     }
 
     ~CRemoteIndexWriteActivity()
     {
-        if (builder != nullptr && helper != nullptr)
+        if (builder != nullptr)
         {
-            Owned<IPropertyTree> metadata;
-            metadata.setown(createPTree("metadata", ipt_fast));
-            buildUserMetadata(metadata, *helper);
+            Owned<IPropertyTree> metadata = createPTree("metadata");
+            for (const auto &it : indexMetaData)
+            {
+                metadata->setProp(it.first.c_str(), it.second.c_str());
+            }
 
-            metadata->setProp("_record_ECL", helper->queryRecordECL());
-            setRtlFormat(*metadata, helper->queryDiskRecordSize());
+            setRtlFormat(*metadata, outMeta);
 
             unsigned int fileCrc;
             builder->finish(metadata, &fileCrc, maxRecordSizeSeen, nullptr);
@@ -2892,10 +2889,10 @@ public:
 
     virtual void write(size32_t sz, const void *rowData) override
     {
+        const RtlRecord& inputRecordAccessor = inMeta->queryRecordAccessor(true);
         size32_t rowOffset = 0;
         while(rowOffset < sz)
         {
-            const RtlRecord& inputRecordAccessor = inMeta->queryRecordAccessor(true);
             size32_t rowSize = inputRecordAccessor.getRecordSize(rowData);
             processRow((const byte *)rowData + rowOffset, rowSize);
             rowOffset += rowSize;
