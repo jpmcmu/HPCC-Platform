@@ -2677,10 +2677,10 @@ class CRemoteIndexWriteActivity : public CRemoteWriteBaseActivity, implements IB
     size32_t keyedSize = 0;
     size32_t maxDiskRecordSize = 0;
     size32_t maxRecordSizeSeen = 0; // used to store the maximum record size seen, for metadata
+    size32_t nodeSize = NODESIZE;
     bool isTlk = false;
     bool opened = false;
 
-    UnexpectedVirtualFieldCallback fieldCallback;
     Owned<const IDynamicTransform> translator;
     std::map<std::string, std::string> indexMetaData;
 
@@ -2751,7 +2751,6 @@ public:
         const RtlRecord &outRecord = outMeta->queryRecordAccessor(true);
         translator.setown(createRecordTranslator(outRecord, inRecord));
 
-        unsigned nodeSize = NODESIZE;
         if (config.hasProp("nodeSize"))
         {
             nodeSize = config.getPropInt("nodeSize");
@@ -2799,6 +2798,13 @@ public:
 
     virtual void close(IXmlWriterExt* response) override
     {
+        uint64_t size = 0;
+        if (iFileIOStream)
+        {
+            iFileIOStream->flush();
+            size = iFileIOStream->size();
+        }
+
         if (builder != nullptr)
         {
             Owned<IPropertyTree> metadata = createPTree("metadata");
@@ -2811,6 +2817,26 @@ public:
 
             unsigned int fileCrc;
             builder->finish(metadata, &fileCrc, maxRecordSizeSeen, nullptr);
+
+            uint32_t numLeafNodes = builder->getStatistic(StNumLeafCacheAdds);
+            uint32_t numBranchNodes = builder->getStatistic(StNumNodeCacheAdds);
+            uint32_t numBlobNodes = builder->getStatistic(StNumBlobCacheAdds);
+            uint64_t branchMemorySize = builder->getStatistic(StSizeBranchMemory);
+            uint64_t leafMemorySize = builder->getStatistic(StSizeLeafMemory);
+
+            if (response)
+            {
+                response->outputUInt(uncompressedSize, sizeof(uint64_t), "uncompressedSize");
+                response->outputUInt(size, sizeof(uint64_t), "size");
+                response->outputUInt(processed, sizeof(uint64_t), "recordCount");
+                response->outputUInt(branchMemorySize, sizeof(uint64_t), "branchMemorySize");
+                response->outputUInt(leafMemorySize, sizeof(uint64_t), "leafMemorySize");
+                response->outputUInt(numLeafNodes, sizeof(uint32_t), "numLeafNodes");
+                response->outputUInt(numBranchNodes, sizeof(uint32_t), "numBranchNodes");
+                response->outputUInt(numBlobNodes, sizeof(uint32_t), "numBlobNodes");
+                response->outputUInt(keyedSize, sizeof(uint32_t), "keyedSize");
+                response->outputUInt(nodeSize, sizeof(uint32_t), "nodeSize");
+            }
         }
 
         closeFile();
@@ -5322,26 +5348,7 @@ public:
             }
             case StreamCmd::CLOSE:
             {
-                OwnedActiveSpanScope closeSpan;
-                const char* traceParent = requestTree->queryProp("_trace/traceparent");
-                if (traceParent != nullptr)
-                {
-                    Owned<IProperties> traceHeaders = createProperties();
-                    traceHeaders->setProp("traceparent", traceParent);
-
-                    closeSpan.setown(queryTraceManager().createServerSpan("CloseRequest", traceHeaders));
-                }
-
-                if (0 == cursorHandle)
-                {
-                    IDAFS_Exception* exception = createDafsException(DAFSERR_cmdstream_protocol_failure, "cursor handle not supplied to 'close' command");
-                    if (closeSpan)
-                        closeSpan->recordException(exception);
-                    throw exception;
-                }
-
-                Owned<IFileIO> dummy;
-                checkFileIOHandle(cursorHandle, dummy, true);
+                // handled in final response, see below
                 break;
             }
             case StreamCmd::VERSION:
@@ -5386,6 +5393,24 @@ public:
             }
             case StreamCmd::CLOSE:
             {
+                OwnedActiveSpanScope closeSpan;
+                const char* traceParent = requestTree->queryProp("_trace/traceparent");
+                if (traceParent != nullptr)
+                {
+                    Owned<IProperties> traceHeaders = createProperties();
+                    traceHeaders->setProp("traceparent", traceParent);
+
+                    closeSpan.setown(queryTraceManager().createServerSpan("CloseRequest", traceHeaders));
+                }
+
+                if (0 == cursorHandle)
+                {
+                    IDAFS_Exception* exception = createDafsException(DAFSERR_cmdstream_protocol_failure, "cursor handle not supplied to 'close' command");
+                    if (closeSpan)
+                        closeSpan->recordException(exception);
+                    throw exception;
+                }
+
                 if (lookupFileIOHandle(cursorHandle, fileInfo)) 
                 {
                     if (outFmt_Binary == outputFormat)
@@ -5401,12 +5426,19 @@ public:
                         fileInfo.remoteRequest->close(responseWriter);
                         responseWriter->outputEndNested("results");
                     }
+
+                    Owned<IFileIO> dummy;
+                    checkFileIOHandle(cursorHandle, dummy, true);
                 }
                 else
                 {
-                    IDAFS_Exception* e = createDafsException(DAFSERR_cmdstream_protocol_failure, "cursor handle not found for close command");
+                    IDAFS_Exception* e = createDafsException(DAFSERR_cmdstream_protocol_failure, "invalid cursor handle supplied to 'close' command");
+                    if (closeSpan)
+                        closeSpan->recordException(e);
                     throw e;
                 }
+
+                break;
             }
             default:
                 break;
