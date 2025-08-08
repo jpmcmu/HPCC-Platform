@@ -827,6 +827,7 @@ interface IRemoteActivity : extends IInterface
     virtual IRemoteReadActivity *queryIsReadActivity() { return nullptr; }
     virtual IRemoteWriteActivity *queryIsWriteActivity() { return nullptr; }
     virtual IRemoteFetchActivity *queryIsFetchActivity() { return nullptr; }
+    virtual void close(IXmlWriterExt* response) {};
 };
 
 
@@ -1151,6 +1152,12 @@ public:
     IRemoteActivity *queryActivity() const { return activity; }
     ICompressor *queryCompressor() const { return compressor; }
     ISpan* queryRequestSpan() const { return requestSpan == nullptr ? queryNullSpan() : requestSpan.query(); }
+
+    void close(IXmlWriterExt* closeResponse)
+    {
+        if (activity)
+            activity->close(closeResponse);
+    }
 
     void process(IPropertyTree *requestTree, MemoryBuffer &restMb, MemoryBuffer &responseMb, CClientStats &stats)
     {
@@ -1486,7 +1493,7 @@ protected:
         eofSeen = false;
         return true;
     }
-    void close()
+    void closeFile()
     {
         if (iFileIO)
             bytesRead += iFileIO->getStatistic(StSizeDiskRead);
@@ -1634,7 +1641,7 @@ public:
         if (!fetching) // when in fetch mode, don't assume file won't be used again (likely will be another batch)
         {
             eofSeen = true;
-            close();
+            closeFile();
         }
         retSz = 0;
         return nullptr;
@@ -1840,7 +1847,7 @@ public:
         if (!fetching) // when in fetch mode, don't assume file won't be used again (likely will be another batch)
         {
             eofSeen = true;
-            close();
+            closeFile();
         }
         retSz = 0;
         return nullptr;
@@ -2115,7 +2122,7 @@ public:
         if (!fetching) // when in fetch mode, don't assume file won't be used again (likely will be another batch)
         {
             eofSeen = true;
-            close();
+            closeFile();
         }
         retSz = 0;
         return nullptr;
@@ -2384,7 +2391,7 @@ protected:
 
         opened = true;
     }
-    void close()
+    void closeFile()
     {
         keyManager.clear();
         keyIndex.clear();
@@ -2467,7 +2474,7 @@ public:
             }
             eofSeen = true;
         }
-        close();
+        closeFile();
         return nullptr;
     }
     virtual void serializeCursor(MemoryBuffer &tgt) const override
@@ -2514,7 +2521,7 @@ protected:
     Owned<IFileIO> iFileIO;
     bool grouped = false;
 
-    void close()
+    void closeFile()
     {
         if (iFileIO)
         {
@@ -2594,7 +2601,7 @@ class CRemoteDiskWriteActivity : public CRemoteWriteBaseActivity
             return;
 
         if (!recursiveCreateDirectoryForFile(fileName))
-            throw createDafsExceptionV(DAFSERR_cmdstream_openfailure, "Failed to create dirtory for file: '%s'", fileName.get());
+            throw createDafsExceptionV(DAFSERR_cmdstream_openfailure, "Failed to create directory for file: '%s'", fileName.get());
         OwnedIFile iFile = createIFile(fileName);
         assertex(iFile);
 
@@ -2615,7 +2622,7 @@ class CRemoteDiskWriteActivity : public CRemoteWriteBaseActivity
                 throw createDafsExceptionV(DAFSERR_cmdstream_openfailure, "Failed to open: '%s' for write", fileName.get());
         }
 
-        iFileIOStream.setown(createIOStream(iFileIO));
+        iFileIOStream.setown(createBufferedIOStream(iFileIO));
         if (append)
             iFileIOStream->seek(0, IFSend);
         opened = true;
@@ -2656,84 +2663,13 @@ public:
     }
 };
 
-/*
-class CRemoteIndexWriteHelper : public CThorIndexWriteArg
-{
-    UnexpectedVirtualFieldCallback fieldCallback;
-    Owned<const IDynamicTransform> translator;
-    std::map<std::string, std::string> indexMetaData;
-public:
-    CRemoteIndexWriteHelper(const char * _filename, const char* _compression, IOutputMetaData * _inMeta, IOutputMetaData * _outMeta, unsigned _flags)
-     : filename(_filename), compression(_compression), inMeta(_inMeta), outMeta(_outMeta), flags(_flags)
-    {
-        const RtlRecord &inRecord = inMeta->queryRecordAccessor(true);
-        const RtlRecord &outRecord = outMeta->queryRecordAccessor(true);
-        translator.setown(createRecordTranslator(outRecord, inRecord));
-    }
-
-    virtual bool getIndexMeta(size32_t & lenName, char * & name, size32_t & lenValue, char * & value, unsigned idx)
-    {
-        if (idx >= indexMetaData.size())
-            return false;
-
-        auto it = indexMetaData.begin();
-        std::advance(it, idx);
-
-        lenName = it->first.length();
-        name = (char*) rtlMalloc(lenName);
-        memcpy(name, it->first.c_str(), lenName);
-
-        lenValue = it->second.length();
-        value = (char*) rtlMalloc(lenValue);
-        memcpy(value, it->second.c_str(), lenValue);
-
-        return true;
-    }
-
-    void setIndexMeta(const std::string& name, const std::string& value)
-    {
-        indexMetaData[name] = value;
-    }
-
-    virtual const char * getFileName() { return filename.c_str(); }
-    virtual int getSequence() { return 0; }
-    virtual IOutputMetaData * queryDiskRecordSize() { return outMeta; }
-    virtual const char * queryRecordECL() { return nullptr; }
-    virtual unsigned getFlags() { return flags; }
-    virtual size32_t transform(ARowBuilder & rowBuilder, const void * row, IBlobCreator * blobs, unsigned __int64 & filepos)
-    {
-        // Seems like an UnexpectedVirtualFieldCallback could be used but what about blobs?
-        return translator->translate(rowBuilder, fieldCallback, (const byte *)row);
-    }
-    virtual unsigned getKeyedSize()
-    {
-        if (outMeta == nullptr)
-            return 0;
-
-        const RtlRecord& recAccessor = outMeta->queryRecordAccessor(true);
-        return recAccessor.getFixedOffset(recAccessor.getNumKeyedFields());
-    }
-    virtual unsigned getMaxKeySize() { return 0; }
-    virtual unsigned getFormatCrc() { return 0; }
-    virtual const char * queryCompression() { return compression.c_str(); }
-
-public:
-    std::string filename;
-    std::string compression;
-    IOutputMetaData * inMeta = nullptr;
-    IOutputMetaData * outMeta = nullptr;
-    unsigned flags = 0;
-};
-*/
-
 class CRemoteIndexWriteActivity : public CRemoteWriteBaseActivity, implements IBlobCreator
 {
     Owned<IFileIOStream> iFileIOStream;
     Owned<IKeyBuilder> builder;
-    // Owned<CRemoteIndexWriteHelper> helper;
     Linked<IOutputMetaData> inMeta, outMeta;
     UnexpectedVirtualFieldCallback fieldCallback;
-    OwnedMalloc<char> prevRowBuffer;
+    OwnedMalloc<char> prevKeyBuffer;
     OwnedMalloc<char> rowBuffer;
 
     uint64_t uncompressedSize = 0;
@@ -2755,7 +2691,7 @@ class CRemoteIndexWriteActivity : public CRemoteWriteBaseActivity, implements IB
         size32_t indexRowSize = translator->translate(rowBuilder, fieldCallback, (const byte *)row);
 
         // Key builder checks for duplicate records so we can just check for sortedness
-        if (memcmp(prevRowBuffer.get(), rowBuffer.get(), keyedSize) > 0)
+        if (memcmp(prevKeyBuffer.get(), rowBuffer.get(), keyedSize) > 0)
         {
             throw createDafsExceptionV(DAFSERR_cmdstream_generalwritefailure, "CRemoteIndexWriteActivity: Incoming rows are not sorted.");
         }
@@ -2767,7 +2703,7 @@ class CRemoteIndexWriteActivity : public CRemoteWriteBaseActivity, implements IB
             maxRecordSizeSeen = indexRowSize;
 
         processed++;
-        memcpy(prevRowBuffer.get(), rowBuffer.get(), maxDiskRecordSize);
+        memcpy(prevKeyBuffer.get(), rowBuffer.get(), keyedSize);
     }
 
     void openFileStream()
@@ -2775,7 +2711,6 @@ class CRemoteIndexWriteActivity : public CRemoteWriteBaseActivity, implements IB
         if (!recursiveCreateDirectoryForFile(fileName))
             throw createDafsExceptionV(DAFSERR_cmdstream_openfailure, "Failed to create dirtory for file: '%s'", fileName.get());
         OwnedIFile iFile = createIFile(fileName);
-        assertex(iFile);
     
         iFileIO.setown(iFile->open(IFOcreate));
         if (!iFileIO)
@@ -2806,34 +2741,11 @@ public:
 
         std::string compression = config.queryProp("compressed", "default");
         toLower(compression);
-        trim(compression);
 
-        unsigned flags = COL_PREFIX | HTREE_FULLSORT_KEY | USE_TRAILING_HEADER;
-
-        if (compression == "default")
-        {
-            flags |= HTREE_COMPRESSED_KEY;
-            compression = "";
-        }
-        else if (compression == "lzw")
-        {
-            flags |= HTREE_COMPRESSED_KEY;
-            compression = "";
-        }
-        else if (compression == "row")
-        {
-            compression = "";
-            flags |= HTREE_COMPRESSED_KEY | HTREE_QUICK_COMPRESSED_KEY;
-        }
-        else if (compression.substr(0,7) == "inplace")
-        {
-            flags |= HTREE_COMPRESSED_KEY;
-        }
-
+        unsigned flags = COL_PREFIX | HTREE_FULLSORT_KEY | USE_TRAILING_HEADER | HTREE_COMPRESSED_KEY;
         bool isVariable = outMeta->isVariableSize();
         if (isVariable)
             flags |= HTREE_VARSIZE;
-
 
         const RtlRecord &inRecord = inMeta->queryRecordAccessor(true);
         const RtlRecord &outRecord = outMeta->queryRecordAccessor(true);
@@ -2862,13 +2774,30 @@ public:
             throw MakeStringException(99, "Index maximum record length (%d) exceeds 32k internal limit", maxDiskRecordSize);
 
         rowBuffer.allocateN(maxDiskRecordSize, true);
-        prevRowBuffer.allocateN(maxDiskRecordSize, true);
+        prevKeyBuffer.allocateN(keyedSize, true);
 
         openFileStream();
         builder.setown(createKeyBuilder(iFileIOStream.get(), flags, maxDiskRecordSize, nodeSize, keyedSize, 0, nullptr, compression.c_str(), true, false));
     }
 
     ~CRemoteIndexWriteActivity()
+    {
+        try
+        {
+            if (opened)
+            {
+                Owned<IXmlWriterExt> closeResponseWriter = createIXmlWriterExt(0, 0, nullptr, WTJSONObject);
+                close(closeResponseWriter.get());
+            }
+        }
+        catch (IException *e)
+        {
+            EXCLOG(e, "CRemoteIndexWriteActivity::~CRemoteIndexWriteActivity");
+            e->Release();
+        }
+    }
+
+    virtual void close(IXmlWriterExt* response) override
     {
         if (builder != nullptr)
         {
@@ -2884,7 +2813,8 @@ public:
             builder->finish(metadata, &fileCrc, maxRecordSizeSeen, nullptr);
         }
 
-        close();
+        closeFile();
+        opened = false;
     }
 
     virtual void write(size32_t sz, const void *rowData) override
@@ -2894,6 +2824,9 @@ public:
         while(rowOffset < sz)
         {
             size32_t rowSize = inputRecordAccessor.getRecordSize(rowData);
+            if (rowOffset + rowSize > sz)
+                throw createDafsException(DAFSERR_cmdstream_protocol_failure, "CRemoteIndexWriteActivity: row size exceeds remaining data size");
+
             processRow((const byte *)rowData + rowOffset, rowSize);
             rowOffset += rowSize;
         }
@@ -2943,7 +2876,7 @@ public:
         const void *ret = outBuilder.getSelf();
         memcpy(tgt, &count, sizeof(count));
         outBuilder.finishRow(sizeof(count));
-        close();
+        closeFile();
         return ret;
     }
     virtual StringBuffer &getInfoStr(StringBuffer &out) const override
@@ -5450,6 +5383,30 @@ public:
                 else
                     responseWriter->outputString(strlen(DAFILESRV_VERSIONSTRING), DAFILESRV_VERSIONSTRING, "version");
                 break;
+            }
+            case StreamCmd::CLOSE:
+            {
+                if (lookupFileIOHandle(cursorHandle, fileInfo)) 
+                {
+                    if (outFmt_Binary == outputFormat)
+                    {
+                        Owned<IXmlWriterExt> closeResponseWriter = createIXmlWriterExt(0, 0, nullptr, WTJSONObject);
+                        fileInfo.remoteRequest->close(closeResponseWriter);
+                        size32_t closeResponseSz = closeResponseWriter->length();
+                        reply.append(closeResponseSz).append(closeResponseSz, closeResponseWriter->str());
+                    }
+                    else
+                    {
+                        responseWriter->outputBeginNested("results", true);
+                        fileInfo.remoteRequest->close(responseWriter);
+                        responseWriter->outputEndNested("results");
+                    }
+                }
+                else
+                {
+                    IDAFS_Exception* e = createDafsException(DAFSERR_cmdstream_protocol_failure, "cursor handle not found for close command");
+                    throw e;
+                }
             }
             default:
                 break;

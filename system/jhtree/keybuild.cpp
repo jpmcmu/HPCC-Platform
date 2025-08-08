@@ -220,7 +220,7 @@ public:
                 compression = _helper->queryCompression();
         }
 
-        if (!isEmptyString(compression))
+        if (!isEmptyString(compression) && !strsame(compression, "lzw") && !strsame(compression, "default"))
         {
             hdr->version = 2;    // Old builds will give a reasonable error message
             if (strieq(compression, "POC") || startsWithIgnoreCase(compression, "POC:"))
