@@ -376,6 +376,41 @@ protected:
     mutable std::weak_ptr<byte[]> expandedPayload;
 };
 
+
+class CJHBlockCompressedSearchNode : public CJHSearchNode
+{
+protected:
+    size32_t keyLen = 0;
+    size32_t keyCompareLen = 0;
+    size32_t keyRecLen = 0;
+
+    unsigned __int64 firstSequence = 0;
+
+    inline size32_t getKeyLen() const { return keyLen; }
+
+    char* expandBlock(const void* src, size32_t &decompressedSize);
+public:
+    //These are the key functions that need to be implemented for a node that can be searched
+    inline size32_t getNumKeys() const { return hdr.numKeys; }
+    virtual bool getKeyAt(unsigned int num, char *dest) const override;         // Retrieve keyed fields
+    virtual bool fetchPayload(unsigned int num, char *dest, PayloadReference & activePayload) const override;     // Retrieve payload fields. Note destination is assumed to already contain keyed fields
+    virtual size32_t getSizeAt(unsigned int num) const override;
+    virtual offset_t getFPosAt(unsigned int num) const override;
+    virtual unsigned __int64 getSequence(unsigned int num) const override;
+    virtual int compareValueAt(const char *src, unsigned int index) const override;
+
+    virtual int locateGE(const char * search, unsigned minIndex) const override;
+    virtual int locateGT(const char * search, unsigned minIndex) const override;
+
+// Loading etc
+    virtual void load(CKeyHdr *keyHdr, const void *rawData, offset_t pos, bool needCopy) override;
+    virtual void dump(FILE *out, int length, unsigned rowCount, bool raw) const override;
+
+protected:
+    //The following are used for faking payload events
+    mutable std::weak_ptr<byte[]> expandedPayload;
+};
+
 class CJHVarTreeNode : public CJHLegacySearchNode 
 {
     const char **recArray;
@@ -498,6 +533,25 @@ private:
 public:
     CLegacyWriteNode(offset_t fpos, CKeyHdr *keyHdr, bool isLeafNode);
     ~CLegacyWriteNode();
+
+    virtual bool add(offset_t pos, const void *data, size32_t size, unsigned __int64 sequence) override;
+    virtual void finalize() override;
+    virtual const void *getLastKeyValue() const override { return lastKeyValue; }
+    virtual unsigned __int64 getLastSequence() const override { return lastSequence; }
+    virtual size32_t getMemorySize() const override { return memorySize; }
+};
+
+class jhtree_decl CBlockCompressedWriteNode : public CWriteNode
+{
+private:
+    KeyCompressor compressor;
+    unsigned keyLen = 0;
+    size32_t memorySize = 0;
+    char *lastKeyValue = nullptr;
+    unsigned __int64 lastSequence = 0;
+public:
+    CBlockCompressedWriteNode(offset_t fpos, CKeyHdr *keyHdr, bool isLeafNode);
+    ~CBlockCompressedWriteNode();
 
     virtual bool add(offset_t pos, const void *data, size32_t size, unsigned __int64 sequence) override;
     virtual void finalize() override;
