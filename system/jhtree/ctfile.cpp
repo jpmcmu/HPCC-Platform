@@ -484,8 +484,9 @@ size32_t CLegacyWriteNode::compressValue(const char *keyData, size32_t size, cha
 
 //=========================================================================================================
 
-CBlockCompressedWriteNode::CBlockCompressedWriteNode(offset_t _fpos, CKeyHdr *_keyHdr, bool isLeafNode) : CWriteNode(_fpos, _keyHdr, isLeafNode)
+CBlockCompressedWriteNode::CBlockCompressedWriteNode(offset_t _fpos, CKeyHdr *_keyHdr, bool isLeafNode, CompressionMethod _compressionMethod) : CWriteNode(_fpos, _keyHdr, isLeafNode), compressionMethod(_compressionMethod)
 {
+    hdr.compressionType = BlockCompression;
     keyLen = keyHdr->getMaxKeyLength();
     if (!isLeafNode)
     {
@@ -510,12 +511,16 @@ bool CBlockCompressedWriteNode::add(offset_t pos, const void *indata, size32_t i
         keyPtr += sizeof(rsequence);
         hdr.keyBytes += sizeof(rsequence);
 
+        memcpy(keyPtr, &compressionMethod, sizeof(compressionMethod));
+        keyPtr += sizeof(compressionMethod);
+        hdr.keyBytes += sizeof(compressionMethod);
+
         //Adjust the fixed key size to include the fileposition field which is written by writekey.
         bool rowCompressed = false;
         bool isVariable = keyHdr->isVariable();
         size32_t fixedKeySize = isVariable ? 0 : keyLen + sizeof(offset_t);
 
-        ICompressHandler * handler = queryCompressHandler(CompressionMethod::COMPRESS_METHOD_ZSTD);
+        ICompressHandler * handler = queryCompressHandler(compressionMethod);
         compressor.open(keyPtr, maxBytes-hdr.keyBytes, handler, isVariable, fixedKeySize);
     }
 
@@ -1245,9 +1250,8 @@ int CJHBlockCompressedSearchNode::locateGT(const char * search, unsigned minInde
     return a;
 }
 
-char *CJHBlockCompressedSearchNode::expandBlock(const void *src, size32_t &decompressedSize)
+char *CJHBlockCompressedSearchNode::expandBlock(const void *src, size32_t &decompressedSize, CompressionMethod compressionMethod)
 {
-    CompressionMethod compressionMethod = CompressionMethod::COMPRESS_METHOD_ZSTD;
     ICompressHandler * handler = queryCompressHandler(compressionMethod);
     if (!handler)
         throw makeStringExceptionV(JHTREE_KEY_UNKNOWN_COMPRESSION, "Unknown payload compression method %d", (int)compressionMethod);
@@ -1283,9 +1287,13 @@ void CJHBlockCompressedSearchNode::load(CKeyHdr *_keyHdr, const void *rawData, o
     firstSequence = *(unsigned __int64 *) keys;
     keys += sizeof(unsigned __int64);
     _WINREV(firstSequence);
+    
+    CompressionMethod compressionMethod = CompressionMethod::COMPRESS_METHOD_ZSTD;
+    compressionMethod = *(CompressionMethod*) keys;
+    keys += sizeof(CompressionMethod);
 
     CCycleTimer expansionTimer(true);
-    keyBuf = expandData(keys, inMemorySize);
+    keyBuf = expandBlock(keys, inMemorySize, compressionMethod);
     loadExpandTime = expansionTimer.elapsedNs();
 }
 

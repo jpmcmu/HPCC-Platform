@@ -1475,6 +1475,9 @@ CJHTreeNode *CKeyIndex::_createNode(const NodeHdr &nodeHdr) const
             if (nodeHdr.nodeType == NodeBranch)
                 return new CJHInplaceBranchNode();
             UNIMPLEMENTED;
+        case BlockCompression:
+            if (nodeHdr.nodeType == NodeLeaf || nodeHdr.nodeType == NodeBranch)
+                return new CJHBlockCompressedSearchNode();
         default:
             throwUnexpected();
         }

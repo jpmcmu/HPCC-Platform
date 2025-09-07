@@ -114,6 +114,43 @@ class LegacyIndexCompressor : public CInterfaceOf<IIndexCompressor>
     }
 };
 
+class BlockCompressedIndexCompressor : public IIndexCompressor
+{
+    CompressionMethod compressionMethod = COMPRESS_METHOD_ZSTD;
+public:
+    BlockCompressedIndexCompressor(unsigned keyedSize, IHThorIndexWriteArg *helper, const char* options)
+    {
+        auto processOption = [this](const char * option, const char * value)
+        {
+            if (strieq(option, "compression"))
+            {
+                compressionMethod = translateToCompMethod(value, COMPRESS_METHOD_ZSTD);
+            }
+            else
+            {
+                //ignore any unrecognised options
+            }
+        };
+
+        processOptionString(options, processOption);
+    }
+
+    virtual CWriteNode *createNode(offset_t _fpos, CKeyHdr *_keyHdr, bool isLeafNode) const override
+    {
+        return new CBlockCompressedWriteNode(_fpos, _keyHdr, isLeafNode, compressionMethod);
+    }
+
+    virtual offset_t queryBranchMemorySize() const override
+    {
+        return 0;
+    }
+
+    virtual offset_t queryLeafMemorySize() const override
+    {
+        return 0;
+    }
+};
+
 class HybridIndexCompressor : public CInterfaceOf<IIndexCompressor>
 {
 protected:
@@ -130,6 +167,10 @@ protected:
         else if (strcmp(compressionType, "legacy") == 0)
         {
             return new LegacyIndexCompressor();
+        }
+        else if (strcmp(compressionType, "block") == 0)
+        {
+            return new BlockCompressedIndexCompressor(keyedSize, helper, options);
         }
         return nullptr;
     }

@@ -123,6 +123,7 @@ enum CompressionType : byte
     // Additional compression formats can be added here...
     SplitPayload = 1,         // A proof-of-concept using separate compression blocks for keyed fields vs payload
     InplaceCompression = 2,
+    BlockCompression = 3
 };
 
 //#pragma pack(1)
@@ -388,7 +389,7 @@ protected:
 
     inline size32_t getKeyLen() const { return keyLen; }
 
-    char* expandBlock(const void* src, size32_t &decompressedSize);
+    char* expandBlock(const void* src, size32_t &decompressedSize, CompressionMethod compressionMethod);
 public:
     //These are the key functions that need to be implemented for a node that can be searched
     inline size32_t getNumKeys() const { return hdr.numKeys; }
@@ -545,12 +546,13 @@ class jhtree_decl CBlockCompressedWriteNode : public CWriteNode
 {
 private:
     KeyCompressor compressor;
+    CompressionMethod compressionMethod;
     unsigned keyLen = 0;
     size32_t memorySize = 0;
     char *lastKeyValue = nullptr;
     unsigned __int64 lastSequence = 0;
 public:
-    CBlockCompressedWriteNode(offset_t fpos, CKeyHdr *keyHdr, bool isLeafNode);
+    CBlockCompressedWriteNode(offset_t fpos, CKeyHdr *keyHdr, bool isLeafNode, CompressionMethod compressionMethod);
     ~CBlockCompressedWriteNode();
 
     virtual bool add(offset_t pos, const void *data, size32_t size, unsigned __int64 sequence) override;
