@@ -89,8 +89,7 @@ char *CJHBlockCompressedSearchNode::expandBlock(const void *src, size32_t &decom
         throw makeStringExceptionV(JHTREE_KEY_UNKNOWN_COMPRESSION, "Unknown payload compression method %d", (int)compressionMethod);
 
     const char * options = nullptr;
-    Owned<IExpander> exp = createLZWExpander(true);
-    // Owned<IExpander> exp = handler->getExpander(options);
+    Owned<IExpander> exp = handler->getExpander(options);
 
     int len=exp->init(src);
     if (len==0)
@@ -220,7 +219,8 @@ unsigned __int64 CJHBlockCompressedSearchNode::getSequence(unsigned int index) c
 
 //=========================================================================================================
 
-CBlockCompressedWriteNode::CBlockCompressedWriteNode(offset_t _fpos, CKeyHdr *_keyHdr, bool isLeafNode, CompressionMethod _compressionMethod) : CWriteNode(_fpos, _keyHdr, isLeafNode), compressionMethod(_compressionMethod)
+CBlockCompressedWriteNode::CBlockCompressedWriteNode(BlockCompressedIndexCompressor* _indexCompressor, offset_t _fpos, CKeyHdr *_keyHdr, bool isLeafNode, CompressionMethod _compressionMethod) : 
+    CWriteNode(_fpos, _keyHdr, isLeafNode), indexCompressor(_indexCompressor), compressionMethod(_compressionMethod)
 {
     hdr.compressionType = BlockCompression;
     keyLen = keyHdr->getMaxKeyLength();
@@ -257,8 +257,7 @@ bool CBlockCompressedWriteNode::add(offset_t pos, const void *indata, size32_t i
         size32_t fixedKeySize = isVariable ? 0 : keyLen + sizeof(offset_t);
 
         ICompressHandler * handler = queryCompressHandler(compressionMethod);
-        compressor.open(keyPtr, maxBytes-hdr.keyBytes, isVariable, false, fixedKeySize);
-        // compressor.open(keyPtr, maxBytes-hdr.keyBytes, handler, isVariable, fixedKeySize);
+        compressor.open(keyPtr, maxBytes-hdr.keyBytes, handler, isVariable, fixedKeySize);
     }
 
     if (0xffff == hdr.numKeys || 0 == compressor.writekey(pos, (const char *)indata, insize))

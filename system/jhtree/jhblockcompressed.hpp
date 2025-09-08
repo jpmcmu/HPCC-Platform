@@ -58,17 +58,22 @@ protected:
     mutable std::weak_ptr<byte[]> expandedPayload;
 };
 
+class BlockCompressedIndexCompressor;
+
 class jhtree_decl CBlockCompressedWriteNode : public CWriteNode
 {
 private:
     KeyCompressor compressor;
-    CompressionMethod compressionMethod;
-    unsigned keyLen = 0;
-    size32_t memorySize = 0;
+    BlockCompressedIndexCompressor* indexCompressor = nullptr;
+    MemoryBuffer* uncompressedBuffer = nullptr;
     char *lastKeyValue = nullptr;
     unsigned __int64 lastSequence = 0;
+    size32_t keyLen = 0;
+    size32_t memorySize;
+    CompressionMethod compressionMethod = COMPRESS_METHOD_ZSTD;
+
 public:
-    CBlockCompressedWriteNode(offset_t fpos, CKeyHdr *keyHdr, bool isLeafNode, CompressionMethod compressionMethod);
+    CBlockCompressedWriteNode(BlockCompressedIndexCompressor* indexCompressor, offset_t fpos, CKeyHdr *keyHdr, bool isLeafNode, CompressionMethod compressionMethod);
     ~CBlockCompressedWriteNode();
 
     virtual bool add(offset_t pos, const void *data, size32_t size, unsigned __int64 sequence) override;
@@ -81,14 +86,47 @@ public:
 class BlockCompressedIndexCompressor : public CInterfaceOf<IIndexCompressor>
 {
     CompressionMethod compressionMethod = COMPRESS_METHOD_ZSTD;
+
+    const float INITIAL_COMPRESSION_RATIO_ESTIMATE = 0.5f;
+    float estimatedCompressionRatio = INITIAL_COMPRESSION_RATIO_ESTIMATE;
+    size32_t compressionSampleCount = 0;
+
+    std::vector<std::shared_ptr<MemoryBuffer>> buffers;
+
+friend class CBlockCompressedWriteNode;
+
+    // Note: At the moment there should only ever be one set of buffers needed, but this could change in the future
+    std::shared_ptr<MemoryBuffer> getDataBuffer(size32_t capacity = NODESIZE * 2)
+    {
+        if (buffers.empty()) {
+            return std::make_shared<MemoryBuffer>(capacity);
+        }
+
+        std::shared_ptr<MemoryBuffer> buffer = buffers.back();
+        buffers.pop_back();
+        return buffer;
+    }
+
+    void releaseDataBuffer(std::shared_ptr<MemoryBuffer> buffer)
+    {
+        buffer->clear();
+        buffers.push_back(buffer);
+    }
+
+    void addCompressionSample(size32_t uncompressedSize, size32_t compressedSize)
+    {
+        float compressionRatio = (float)compressedSize / uncompressedSize;
+        estimatedCompressionRatio = (estimatedCompressionRatio + compressionRatio) / (++compressionSampleCount);
+    }
 public:
     BlockCompressedIndexCompressor(unsigned keyedSize, IHThorIndexWriteArg *helper, const char* options)
     {
         auto processOption = [this](const char * option, const char * value)
         {
+            compressionMethod = COMPRESS_METHOD_LZW;
             if (strieq(option, "compression"))
             {
-                compressionMethod = translateToCompMethod(value, COMPRESS_METHOD_ZSTD);
+                // compressionMethod = translateToCompMethod(value, COMPRESS_METHOD_ZSTD);
             }
             else
             {
@@ -98,12 +136,12 @@ public:
 
         processOptionString(options, processOption);
     }
-    
+
     virtual const char *queryName() const override { return "Block"; }
 
     virtual CWriteNode *createNode(offset_t _fpos, CKeyHdr *_keyHdr, bool isLeafNode) const override
     {
-        return new CBlockCompressedWriteNode(_fpos, _keyHdr, isLeafNode, compressionMethod);
+        return new CBlockCompressedWriteNode(this, _fpos, _keyHdr, isLeafNode, compressionMethod);
     }
 
     virtual offset_t queryBranchMemorySize() const override
@@ -114,6 +152,11 @@ public:
     virtual offset_t queryLeafMemorySize() const override
     {
         return 0;
+    }
+
+    float getEstimatedCompressionRatio() const
+    {
+        return estimatedCompressionRatio;
     }
 };
 
