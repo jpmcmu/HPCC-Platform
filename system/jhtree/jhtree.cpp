@@ -56,6 +56,7 @@
 #include "jstats.h"
 #include "ctfile.hpp"
 #include "jhinplace.hpp"
+#include "jhblockcompressed.hpp"
 
 #include "jhtree.ipp"
 #include "keybuild.hpp"

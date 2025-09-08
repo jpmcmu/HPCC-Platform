@@ -1,0 +1,283 @@
+/*##############################################################################
+
+    HPCC SYSTEMS software Copyright (C) 2025 HPCC Systems®.
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+############################################################################## */
+
+#include "jhblockcompressed.hpp"
+
+#include "platform.h"
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <algorithm>
+
+#ifdef __linux__
+#include <alloca.h>
+#endif
+
+#include "jmisc.hpp"
+#include "jset.hpp"
+#include "hlzw.h"
+
+#include "ctfile.hpp"
+#include "jstats.h"
+#include "jevent.hpp"
+
+int CJHBlockCompressedSearchNode::locateGE(const char * search, unsigned minIndex) const
+{
+#ifdef TIME_NODE_SEARCH
+    CCycleTimer timer;
+#endif
+    unsigned int a = minIndex;
+    int b = getNumKeys();
+    // first search for first GTE entry (result in b(<),a(>=))
+    while ((int)a<b)
+    {
+        int i = a+(b-a)/2;
+        int rc = compareValueAt(search, i);
+        if (rc>0)
+            a = i+1;
+        else
+            b = i;
+    }
+
+#ifdef TIME_NODE_SEARCH
+    unsigned __int64 elapsed = timer.elapsedCycles();
+    if (isBranch())
+        branchSearchCycles += elapsed;
+    else
+        leafSearchCycles += elapsed;
+#endif
+    return a;
+}
+
+int CJHBlockCompressedSearchNode::locateGT(const char * search, unsigned minIndex) const
+{
+    unsigned int a = minIndex;
+    int b = getNumKeys();
+    // Locate first record greater than src
+    while ((int)a<b)
+    {
+        //MORE: Note sure why the index is subtly different to the GTE version
+        //I suspect no good reason, and may mess up cache locality.
+        int i = a+(b+1-a)/2;
+        int rc = compareValueAt(search, i-1);
+        if (rc>=0)
+            a = i;
+        else
+            b = i-1;
+    }
+    return a;
+}
+
+char *CJHBlockCompressedSearchNode::expandBlock(const void *src, size32_t &decompressedSize, CompressionMethod compressionMethod)
+{
+    ICompressHandler * handler = queryCompressHandler(compressionMethod);
+    if (!handler)
+        throw makeStringExceptionV(JHTREE_KEY_UNKNOWN_COMPRESSION, "Unknown payload compression method %d", (int)compressionMethod);
+
+    const char * options = nullptr;
+    Owned<IExpander> exp = createLZWExpander(true);
+    // Owned<IExpander> exp = handler->getExpander(options);
+
+    int len=exp->init(src);
+    if (len==0)
+    {
+        decompressedSize = 0;
+        return NULL;
+    }
+    char *outkeys=(char *) allocMem(len);
+    exp->expand(outkeys);
+    decompressedSize = len;
+    return outkeys;
+}
+
+void CJHBlockCompressedSearchNode::load(CKeyHdr *_keyHdr, const void *rawData, offset_t _fpos, bool needCopy)
+{
+    CJHSearchNode::load(_keyHdr, rawData, _fpos, needCopy);
+
+    keyLen = _keyHdr->getMaxKeyLength();
+    if (hdr.nodeType == NodeBranch)
+        keyLen = keyHdr->getNodeKeyLength();
+
+    keyCompareLen = _keyHdr->getNodeKeyLength();
+    keyRecLen = keyLen + sizeof(offset_t);
+
+    const char *keys = ((const char *) rawData) + sizeof(hdr);
+
+    firstSequence = *(unsigned __int64 *) keys;
+    keys += sizeof(unsigned __int64);
+    _WINREV(firstSequence);
+    
+    CompressionMethod compressionMethod = CompressionMethod::COMPRESS_METHOD_ZSTD;
+    compressionMethod = *(CompressionMethod*) keys;
+    keys += sizeof(CompressionMethod);
+
+    CCycleTimer expansionTimer(true);
+    keyBuf = expandBlock(keys, inMemorySize, compressionMethod);
+    loadExpandTime = expansionTimer.elapsedNs();
+}
+
+int CJHBlockCompressedSearchNode::compareValueAt(const char *src, unsigned int index) const
+{
+    return memcmp(src, keyBuf + index*keyRecLen + (keyHdr->hasSpecialFileposition() ? sizeof(offset_t) : 0), keyCompareLen);
+}
+
+bool CJHBlockCompressedSearchNode::fetchPayload(unsigned int index, char *dst, PayloadReference & activePayload) const
+{
+    if (index >= hdr.numKeys) return false;
+    if (!dst) return true;
+
+    bool recording = recordingEvents();
+    if (recording)
+    {
+        std::shared_ptr<byte []> sharedPayload;
+
+        {
+            CriticalBlock block(expandPayloadCS);
+
+            sharedPayload = expandedPayload.lock();
+            if (!sharedPayload)
+            {
+                //Allocate a dummy payload so we can track whether it is hit or not
+                sharedPayload = std::shared_ptr<byte []>(new byte[1]);
+                expandedPayload = sharedPayload;
+            }
+        }
+
+        queryRecorder().recordIndexPayload(keyHdr->getKeyId(), getFpos(), 0, getMemSize());
+
+        //Ensure the payload stays alive for the duration of this call, and is likely preserved until
+        //the next call.  Always replacing is as efficient as conditional - since we are using a move operator.
+        activePayload.data = std::move(sharedPayload);
+    }
+
+    const char * p = keyBuf + index*keyRecLen;
+    if (keyHdr->hasSpecialFileposition())
+    {
+        //It would make sense to have the fileposition at the start of the row from the perspective of the
+        //internal representation, but that would complicate everything else which assumes the keyed
+        //fields start at the beginning of the row.
+        memcpy(dst+keyCompareLen, p+keyCompareLen+sizeof(offset_t), keyLen-keyCompareLen);
+        memcpy(dst+keyLen, p, sizeof(offset_t));
+    }
+    else
+    {
+        memcpy(dst+keyCompareLen, p+keyCompareLen, keyLen-keyCompareLen);
+    }
+    return true;
+}
+
+bool CJHBlockCompressedSearchNode::getKeyAt(unsigned int index, char *dst) const
+{
+    if (index >= hdr.numKeys) return false;
+    if (dst)
+    {
+        const char * p = keyBuf + index*keyRecLen;
+        if (keyHdr->hasSpecialFileposition())
+            p += sizeof(offset_t);
+        memcpy(dst, p, keyCompareLen);
+    }
+    return true;
+}
+
+size32_t CJHBlockCompressedSearchNode::getSizeAt(unsigned int index) const
+{
+    if (keyHdr->hasSpecialFileposition())
+        return keyLen + sizeof(offset_t);
+    else
+        return keyLen;
+}
+
+offset_t CJHBlockCompressedSearchNode::getFPosAt(unsigned int index) const
+{
+    if (index >= hdr.numKeys) return 0;
+
+    offset_t pos;
+    const char * p = keyBuf + index*keyRecLen;
+    memcpy( &pos, p, sizeof(__int64));
+    _WINREV(pos);
+    return pos;
+}
+
+unsigned __int64 CJHBlockCompressedSearchNode::getSequence(unsigned int index) const
+{
+    if (index >= hdr.numKeys) return 0;
+    return firstSequence + index;
+}
+
+//=========================================================================================================
+
+CBlockCompressedWriteNode::CBlockCompressedWriteNode(offset_t _fpos, CKeyHdr *_keyHdr, bool isLeafNode, CompressionMethod _compressionMethod) : CWriteNode(_fpos, _keyHdr, isLeafNode), compressionMethod(_compressionMethod)
+{
+    hdr.compressionType = BlockCompression;
+    keyLen = keyHdr->getMaxKeyLength();
+    if (!isLeafNode)
+    {
+        keyLen = keyHdr->getNodeKeyLength();
+    }
+    lastKeyValue = (char *) malloc(keyLen);
+    lastSequence = 0;
+}
+
+CBlockCompressedWriteNode::~CBlockCompressedWriteNode()
+{
+    free(lastKeyValue);
+}
+
+bool CBlockCompressedWriteNode::add(offset_t pos, const void *indata, size32_t insize, unsigned __int64 sequence)
+{
+    if (hdr.numKeys == 0)
+    {
+        unsigned __int64 rsequence = sequence;
+        _WINREV(rsequence);
+        memcpy(keyPtr, &rsequence, sizeof(rsequence));
+        keyPtr += sizeof(rsequence);
+        hdr.keyBytes += sizeof(rsequence);
+
+        memcpy(keyPtr, &compressionMethod, sizeof(compressionMethod));
+        keyPtr += sizeof(compressionMethod);
+        hdr.keyBytes += sizeof(compressionMethod);
+
+        //Adjust the fixed key size to include the fileposition field which is written by writekey.
+        bool rowCompressed = false;
+        bool isVariable = keyHdr->isVariable();
+        size32_t fixedKeySize = isVariable ? 0 : keyLen + sizeof(offset_t);
+
+        ICompressHandler * handler = queryCompressHandler(compressionMethod);
+        compressor.open(keyPtr, maxBytes-hdr.keyBytes, isVariable, false, fixedKeySize);
+        // compressor.open(keyPtr, maxBytes-hdr.keyBytes, handler, isVariable, fixedKeySize);
+    }
+
+    if (0xffff == hdr.numKeys || 0 == compressor.writekey(pos, (const char *)indata, insize))
+        return false;
+
+    if (insize>keyLen)
+        throw MakeStringException(0, "key+payload (%u) exceeds max length (%u)", insize, keyLen);
+
+    memcpy(lastKeyValue, indata, insize);
+    lastSequence = sequence;
+    hdr.numKeys++;
+    memorySize += insize + sizeof(pos);
+    return true;
+}
+
+void CBlockCompressedWriteNode::finalize()
+{
+    compressor.close();
+    if (hdr.numKeys)
+        hdr.keyBytes = compressor.buflen() + sizeof(unsigned __int64); // rsequence
+}
+

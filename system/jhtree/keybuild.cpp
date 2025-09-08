@@ -20,6 +20,7 @@
 #include "bloom.hpp"
 #include "jmisc.hpp"
 #include "jhinplace.hpp"
+#include "jhblockcompressed.hpp"
 
 #include <regex>
 
@@ -114,43 +115,6 @@ class LegacyIndexCompressor : public CInterfaceOf<IIndexCompressor>
     }
 };
 
-class BlockCompressedIndexCompressor : public IIndexCompressor
-{
-    CompressionMethod compressionMethod = COMPRESS_METHOD_ZSTD;
-public:
-    BlockCompressedIndexCompressor(unsigned keyedSize, IHThorIndexWriteArg *helper, const char* options)
-    {
-        auto processOption = [this](const char * option, const char * value)
-        {
-            if (strieq(option, "compression"))
-            {
-                compressionMethod = translateToCompMethod(value, COMPRESS_METHOD_ZSTD);
-            }
-            else
-            {
-                //ignore any unrecognised options
-            }
-        };
-
-        processOptionString(options, processOption);
-    }
-
-    virtual CWriteNode *createNode(offset_t _fpos, CKeyHdr *_keyHdr, bool isLeafNode) const override
-    {
-        return new CBlockCompressedWriteNode(_fpos, _keyHdr, isLeafNode, compressionMethod);
-    }
-
-    virtual offset_t queryBranchMemorySize() const override
-    {
-        return 0;
-    }
-
-    virtual offset_t queryLeafMemorySize() const override
-    {
-        return 0;
-    }
-};
-
 class HybridIndexCompressor : public CInterfaceOf<IIndexCompressor>
 {
 protected:
@@ -188,6 +152,7 @@ protected:
             compression = formatMatch[1];
             if (formatMatch.size() == 3)
                 options = formatMatch[2];
+                options = options.substr(1,options.length()-2); // Get rid of brackets
         }
         else
             return false;
