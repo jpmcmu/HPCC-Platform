@@ -204,11 +204,12 @@ jobs:
 
                 cmake_content = result.stdout
                 return {
-                    "major":    extract_cmake_var(cmake_content, 'HPCC_MAJOR'),
-                    "minor":    extract_cmake_var(cmake_content, 'HPCC_MINOR'),
-                    "point":    extract_cmake_var(cmake_content, 'HPCC_POINT'),
-                    "maturity": extract_cmake_var(cmake_content, 'HPCC_MATURITY'),
-                    "sequence": extract_cmake_var(cmake_content, 'HPCC_SEQUENCE'),
+                    "major":     extract_cmake_var(cmake_content, 'HPCC_MAJOR'),
+                    "minor":     extract_cmake_var(cmake_content, 'HPCC_MINOR'),
+                    "point":     extract_cmake_var(cmake_content, 'HPCC_POINT'),
+                    "maturity":  extract_cmake_var(cmake_content, 'HPCC_MATURITY'),
+                    "sequence":  extract_cmake_var(cmake_content, 'HPCC_SEQUENCE'),
+                    "timestamp": extract_cmake_var(cmake_content, 'HPCC_TAG_TIMESTAMP'),
                 }
 
             def updateVersionCmake(version_info):
@@ -228,9 +229,36 @@ jobs:
                 content = replace_cmake_var(content, 'HPCC_SEQUENCE', version_info.get('sequence'))
                 if version_info.get('maturity'):
                     content = replace_cmake_var(content, 'HPCC_MATURITY', f'"{ version_info["maturity"] }"')
+                if version_info.get('timestamp'):
+                    content = replace_cmake_var(content, 'HPCC_TAG_TIMESTAMP', f'"{ version_info["timestamp"] }"')
 
                 with open("version.cmake", "w") as f:
                     f.write(content)
+
+            def buildChartVersionString(version_info):
+                """Build the version string for helm/hpcc/Chart.yaml from parsed version_info."""
+                major    = version_info.get('major', '0')
+                minor    = version_info.get('minor', '0')
+                point    = version_info.get('point', '0')
+                maturity = version_info.get('maturity', '')
+                sequence = version_info.get('sequence', '0')
+                if maturity == 'release':
+                    return f"{major}.{minor}.{point}"
+                return f"{major}.{minor}.{point}-{maturity}{sequence}"
+
+            def updateChartYaml(chart_path, version_str):
+                """Update version:, appVersion:, and helmVersion: in a helm chart file to match target branch."""
+                if not os.path.exists(chart_path):
+                    print(f"Skipping {chart_path} (not present in working tree)")
+                    return False
+                with open(chart_path, 'r') as f:
+                    content = f.read()
+                content = re.sub(r'^version:.*$',     f'version: {version_str}',     content, flags=re.MULTILINE)
+                content = re.sub(r'^appVersion:.*$',  f'appVersion: {version_str}',  content, flags=re.MULTILINE)
+                content = re.sub(r'helmVersion:.*$',  f'helmVersion: {version_str}', content, flags=re.MULTILINE)
+                with open(chart_path, 'w') as f:
+                    f.write(content)
+                return True
 
             pr = os.environ['PULL_REQUEST_NUMBER']
             title = os.environ['PULL_REQUEST_TITLE']
@@ -300,21 +328,32 @@ jobs:
                     version_info = getTargetVersionCmake(targetBranch)
                     if version_info and version_info.get("major"):
                         branch_result["version"] = f"{version_info['major']}.{version_info['minor']}.{version_info['point']}"
-                        print(f"Syncing version.cmake to {branch_result['version']} to match {targetBranch}")
+                        print(f"Syncing version files to {branch_result['version']} to match {targetBranch}")
                         updateVersionCmake(version_info)
 
-                        add_result = subprocess.run(["git", "add", "version.cmake"], capture_output=True, text=True)
+                        helm_files = [
+                            "helm/hpcc/Chart.yaml",
+                            "helm/hpcc/templates/_helpers.tpl",
+                        ]
+                        chart_version_str = buildChartVersionString(version_info)
+                        for helm_file in helm_files:
+                            updateChartYaml(helm_file, chart_version_str)
+
+                        add_result = subprocess.run(
+                            ["git", "add", "version.cmake"] + helm_files,
+                            capture_output=True, text=True
+                        )
                         if add_result.returncode != 0:
                             print(f"Warning: git add failed: {add_result.stderr}")
 
                         commit_result = subprocess.run(
-                            ["git", "commit", "-m", "Test: sync version.cmake with target branch"],
+                            ["git", "commit", "-m", "Test: sync version files with target branch"],
                             capture_output=True, text=True
                         )
                         if commit_result.returncode != 0:
                             print(f"Info: git commit skipped (no changes): {commit_result.stderr}")
                     else:
-                        print(f"Skipping version.cmake sync for {targetBranch} (file not found or unreadable)")
+                        print(f"Skipping version file sync for {targetBranch} (version.cmake not found or unreadable)")
 
                     # Check if there is a merge conflict
                     merge_conflict = get_merge_conflict("HEAD", f"upstream/{targetBranch}")
