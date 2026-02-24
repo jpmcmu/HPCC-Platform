@@ -87,7 +87,7 @@ using namespace cryptohelper;
 
 static const unsigned __int64 defaultFileStreamChooseNLimit = I64C(0x7fffffffffffffff); // constant should be move to common place (see eclhelper.hpp)
 static const unsigned __int64 defaultFileStreamSkipN = 0;
-static const unsigned defaultDaFSReplyLimitKB = 1024; // 1MB
+static const unsigned defaultDaFSReplyLimitKB = 4096; // 4MB
 enum OutputFormat:byte { outFmt_Binary, outFmt_Xml, outFmt_Json };
 
 
