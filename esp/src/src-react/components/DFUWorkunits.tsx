@@ -110,7 +110,7 @@ export const DFUWorkunits: React.FunctionComponent<DFUWorkunitsProps> = ({
                     return "";
                 }
             },
-            ID: {
+            ID: { // Non-conflicting change
                 label: nlsHPCC.ID,
                 width: 130,
                 formatter: (ID, idx) => {
