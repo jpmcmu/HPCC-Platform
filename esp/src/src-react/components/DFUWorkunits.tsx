@@ -112,7 +112,7 @@ export const DFUWorkunits: React.FunctionComponent<DFUWorkunitsProps> = ({
                 }
             },
             ID: {
-                label: nlsHPCC.ID,
+                label: HPCC.ID,
                 width: 130,
                 formatter: (ID, idx) => {
                     const wu = ESPDFUWorkunit.Get(ID);
